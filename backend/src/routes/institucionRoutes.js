@@ -1,12 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { getInstituciones, getInstitucion, createInstitucion, updateInstitucion, deleteInstitucion } = require('../controllers/institucionController');
+const ctrl = require('../controllers/institucionController');
 const { verificarToken, verificarRol } = require('../middlewares/auth');
 
-router.get('/', verificarToken, getInstituciones);
-router.get('/:id', verificarToken, getInstitucion);
-router.post('/', verificarToken, verificarRol('administrador', 'encargado_contratos'), createInstitucion);
-router.put('/:id', verificarToken, verificarRol('administrador', 'encargado_contratos'), updateInstitucion);
-router.delete('/:id', verificarToken, verificarRol('administrador'), deleteInstitucion);
+const escribir = verificarRol('administrador', 'encargado_contratos');
+
+router.get('/', verificarToken, ctrl.listar);
+router.get('/:id', verificarToken, ctrl.obtener);
+router.get('/:id/historial', verificarToken, ctrl.getHistorial);
+router.post('/', verificarToken, escribir, ctrl.crear);
+router.put('/:id', verificarToken, escribir, ctrl.actualizar);
+router.post('/:id/anular', verificarToken, verificarRol('administrador'), ctrl.anular);
+router.post('/:id/restaurar', verificarToken, verificarRol('administrador'), ctrl.restaurar);
 
 module.exports = router;

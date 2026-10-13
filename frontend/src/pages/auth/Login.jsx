@@ -37,7 +37,7 @@ const Login = () => {
             } catch {
                 // Si el navegador bloquea el almacenamiento, el login sigue funcionando
             }
-            navigate('/dashboard');
+            navigate('/panel');
         } catch {
             setError('Credenciales incorrectas. Intente nuevamente.');
         } finally {

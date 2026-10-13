@@ -1,198 +1,102 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { Plus, User, Pencil, UserX, UserCheck } from 'lucide-react';
 import api from '../../services/api';
-import { Plus, User, X, Pencil, Trash2 } from 'lucide-react';
-import { useColors } from '../../hooks/useColors';
+import { useAuth } from '../../context/AuthContext';
+import { useLista } from '../../hooks/useCatalogo';
+import { Pagina, Encabezado, Tabla, Boton, Modal, Campo, Entrada, Selector, Aviso, Insignia } from '../../components/ui';
+import { useDialogoMotivo, useAvisos } from '../../hooks/useDialogos';
+import { ROLES } from '../../utils/catalogos';
+import { mensajeError } from '../../utils/formato';
+
+const TONO_ROL = { administrador: 'morado', gerente: 'azul', bodeguero: 'verde', encargado_contratos: 'amarillo' };
+const VACIO = { nombre: '', apellido: '', email: '', password: '', rol: '' };
 
 const Usuarios = () => {
-    const c = useColors();
-    const [usuarios, setUsuarios] = useState([]);
-    const [mostrarForm, setMostrarForm] = useState(false);
+    const { usuario: actual } = useAuth();
+    const { datos: usuarios, recargar, cargando } = useLista('/auth/usuarios');
+    const [form, setForm] = useState(null);
     const [editando, setEditando] = useState(null);
-    const [form, setForm] = useState({
-        nombre: '', apellido: '', email: '',
-        password: '', rol: '', activo: true
-    });
+    const [error, setError] = useState('');
+    const [dialogo, pedirMotivo] = useDialogoMotivo();
+    const [aviso, mostrar] = useAvisos();
 
-    useEffect(() => { cargarUsuarios(); }, []);
-
-    const cargarUsuarios = async () => {
-        const res = await api.get('/auth/usuarios');
-        setUsuarios(res.data);
+    const abrir = (u = null) => {
+        setError('');
+        setEditando(u?.id_usuario || null);
+        setForm(u ? { nombre: u.nombre, apellido: u.apellido, email: u.email, password: '', rol: u.rol } : VACIO);
     };
 
-    const handleSubmit = async (e) => {
+    const guardar = async (e) => {
         e.preventDefault();
-        if (editando) {
-            await api.put(`/auth/usuarios/${editando}`, form);
-        } else {
-            await api.post('/auth/registro', form);
-        }
-        setMostrarForm(false);
-        setEditando(null);
-        setForm({ nombre: '', apellido: '', email: '', password: '', rol: '', activo: true });
-        cargarUsuarios();
+        setError('');
+        try {
+            if (editando) await api.put(`/auth/usuarios/${editando}`, form);
+            else await api.post('/auth/registro', form);
+            setForm(null); mostrar('Usuario guardado'); recargar();
+        } catch (err) { setError(mensajeError(err)); }
     };
 
-    const handleEditar = (u) => {
-        setEditando(u.id_usuario);
-        setForm({
-            nombre: u.nombre, apellido: u.apellido,
-            email: u.email, password: '',
-            rol: u.rol, activo: u.activo
-        });
-        setMostrarForm(true);
+    const desactivar = async (u) => {
+        const motivo = await pedirMotivo({ titulo: `Desactivar a ${u.nombre} ${u.apellido}`, peligro: true, confirmar: 'Desactivar', mensaje: 'El usuario ya no podrá ingresar. No se borra, para que la auditoría siga mostrando lo que hizo.' });
+        if (!motivo) return;
+        try { await api.post(`/auth/usuarios/${u.id_usuario}/anular`, { motivo }); mostrar('Usuario desactivado'); recargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
-    const handleEliminar = async (id) => {
-        if (window.confirm('¿Estás seguro de eliminar este usuario permanentemente?')) {
-            await api.delete(`/auth/usuarios/${id}`);
-            cargarUsuarios();
-        }
+    const reactivar = async (u) => {
+        try { await api.post(`/auth/usuarios/${u.id_usuario}/restaurar`, {}); mostrar('Usuario reactivado'); recargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
-    const handleCancelar = () => {
-        setMostrarForm(false);
-        setEditando(null);
-        setForm({ nombre: '', apellido: '', email: '', password: '', rol: '', activo: true });
-    };
-
-    const getRolColor = (rol) => {
-        const colores = {
-            administrador: { bg: '#EDE9FE', text: '#5B21B6' },
-            gerente: { bg: '#DBEAFE', text: '#1E40AF' },
-            bodeguero: { bg: '#D1FAE5', text: '#065F46' },
-            encargado_contratos: { bg: '#FEF3C7', text: '#92400E' }
-        };
-        return colores[rol] || { bg: '#F3F4F6', text: '#374151' };
-    };
-
-    const inputStyle = { backgroundColor: c.inputBg, color: c.inputText, border: `1px solid ${c.inputBorder}`, width: '100%', borderRadius: '8px', padding: '8px 12px', outline: 'none' };
-    const labelStyle = { color: c.textPrimary, fontWeight: '500', display: 'block', marginBottom: '4px' };
+    const campo = (k) => ({ value: form[k], onChange: e => setForm({ ...form, [k]: e.target.value }) });
 
     return (
-        <div className="p-8 min-h-screen" style={{ backgroundColor: c.bg }}>
-            <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl" style={{ backgroundColor: '#1F2D6E18' }}>
-                        <User size={24} style={{ color: '#1F2D6E' }} />
-                    </div>
-                    <h1 className="text-3xl font-bold" style={{ color: c.textPrimary }}>Usuarios</h1>
-                </div>
-                <button onClick={() => { setMostrarForm(true); setEditando(null); }}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-white"
-                    style={{ backgroundColor: c.btnPrimary }}>
-                    <Plus size={18} /> Nuevo Usuario
-                </button>
-            </div>
+        <Pagina>
+            {aviso}{dialogo}
+            <Encabezado icono={User} titulo="Usuarios" subtitulo="Cada usuario tiene su propia cuenta: así la auditoría identifica quién hizo cada cambio, aunque haya varios administradores.">
+                <Boton icono={Plus} onClick={() => abrir()}>Nuevo usuario</Boton>
+            </Encabezado>
 
-            {mostrarForm && (
-                <div className="rounded-xl shadow-sm p-6 mb-6" style={{ backgroundColor: c.card, border: `1px solid ${c.cardBorder}` }}>
-                    <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-bold" style={{ color: c.textPrimary }}>
-                            {editando ? 'Editar Usuario' : 'Registrar Usuario'}
-                        </h2>
-                        <button onClick={handleCancelar} style={{ color: c.textSecondary }}><X size={20} /></button>
-                    </div>
-                    <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label style={labelStyle}>Nombre</label>
-                            <input type="text" value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })} style={inputStyle} required />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Apellido</label>
-                            <input type="text" value={form.apellido} onChange={e => setForm({ ...form, apellido: e.target.value })} style={inputStyle} required />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Correo Electrónico</label>
-                            <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} style={inputStyle} required />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>{editando ? 'Nueva Contraseña (opcional)' : 'Contraseña'}</label>
-                            <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} style={inputStyle} required={!editando} />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Rol</label>
-                            <select value={form.rol} onChange={e => setForm({ ...form, rol: e.target.value })} style={inputStyle} required>
-                                <option value="">Seleccionar rol</option>
-                                <option value="administrador">Administrador</option>
-                                <option value="gerente">Gerente</option>
-                                <option value="bodeguero">Bodeguero</option>
-                                <option value="encargado_contratos">Encargado de Contratos</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Estado</label>
-                            <select value={form.activo} onChange={e => setForm({ ...form, activo: e.target.value === 'true' })} style={inputStyle}>
-                                <option value="true">Activo</option>
-                                <option value="false">Inactivo</option>
-                            </select>
-                        </div>
-                        <div className="col-span-2 flex gap-2">
-                            <button type="submit" className="px-6 py-2 rounded-lg text-white" style={{ backgroundColor: c.btnPrimary }}>
-                                {editando ? 'Actualizar' : 'Guardar'}
-                            </button>
-                            <button type="button" onClick={handleCancelar} className="px-6 py-2 rounded-lg" style={{ backgroundColor: c.inputBg, color: c.textPrimary }}>
-                                Cancelar
-                            </button>
-                        </div>
+            <Tabla
+                claveFila="id_usuario"
+                filas={usuarios}
+                cargando={cargando}
+                columnas={[
+                    { clave: 'nombre', titulo: 'Nombre', render: u => <span className="font-medium">{u.nombre} {u.apellido}</span> },
+                    { clave: 'email', titulo: 'Correo' },
+                    { clave: 'rol', titulo: 'Rol', render: u => <Insignia tono={TONO_ROL[u.rol]}>{ROLES[u.rol]}</Insignia> },
+                    { clave: 'activo', titulo: 'Estado', render: u => <Insignia tono={u.activo ? 'verde' : 'gris'}>{u.activo ? 'Activo' : 'Inactivo'}</Insignia> },
+                    {
+                        clave: 'acc', titulo: '', render: u => (
+                            <div className="flex gap-2">
+                                <Boton pequeno variante="info" icono={Pencil} onClick={() => abrir(u)}>Editar</Boton>
+                                {u.id_usuario !== actual?.id && (u.activo
+                                    ? <Boton pequeno variante="peligro" icono={UserX} onClick={() => desactivar(u)}>Desactivar</Boton>
+                                    : <Boton pequeno variante="exito" icono={UserCheck} onClick={() => reactivar(u)}>Reactivar</Boton>)}
+                            </div>
+                        )
+                    }
+                ]}
+            />
+
+            <Modal abierto={!!form} titulo={editando ? 'Editar usuario' : 'Nuevo usuario'} alCerrar={() => setForm(null)}
+                pie={<><Boton variante="secundario" onClick={() => setForm(null)}>Cancelar</Boton><Boton type="submit" form="form-usuario">Guardar</Boton></>}>
+                {form && (
+                    <form id="form-usuario" onSubmit={guardar} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Campo etiqueta="Nombre" obligatorio><Entrada required {...campo('nombre')} /></Campo>
+                        <Campo etiqueta="Apellido" obligatorio><Entrada required {...campo('apellido')} /></Campo>
+                        <Campo etiqueta="Correo electrónico" obligatorio><Entrada type="email" required {...campo('email')} /></Campo>
+                        <Campo etiqueta={editando ? 'Nueva contraseña (opcional)' : 'Contraseña'} obligatorio={!editando} ayuda="Mínimo 6 caracteres.">
+                            <Entrada type="password" required={!editando} minLength={6} {...campo('password')} />
+                        </Campo>
+                        <Campo etiqueta="Rol" obligatorio>
+                            <Selector vacio="Seleccionar rol" required {...campo('rol')} opciones={Object.entries(ROLES).map(([value, label]) => ({ value, label }))} />
+                        </Campo>
+                        {error && <Aviso tono="rojo" className="md:col-span-2">{error}</Aviso>}
                     </form>
-                </div>
-            )}
-
-            <div className="rounded-xl shadow-sm overflow-hidden" style={{ border: `1px solid ${c.cardBorder}` }}>
-                <table className="w-full">
-                    <thead>
-                        <tr style={{ backgroundColor: c.tableHeader }}>
-                            {['Nombre', 'Apellido', 'Correo', 'Rol', 'Estado', 'Acciones'].map(h => (
-                                <th key={h} className="px-4 py-3 text-left font-medium" style={{ color: c.tableHeaderText }}>{h}</th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {usuarios.map((u) => {
-                            const rol = getRolColor(u.rol);
-                            return (
-                                <tr key={u.id_usuario} style={{ backgroundColor: c.tableRow, borderBottom: `1px solid ${c.tableBorder}` }}
-                                    onMouseEnter={e => e.currentTarget.style.backgroundColor = c.tableRowHover}
-                                    onMouseLeave={e => e.currentTarget.style.backgroundColor = c.tableRow}>
-                                    <td className="px-4 py-3 font-medium" style={{ color: c.textPrimary }}>{u.nombre}</td>
-                                    <td className="px-4 py-3" style={{ color: c.textPrimary }}>{u.apellido}</td>
-                                    <td className="px-4 py-3" style={{ color: c.textSecondary }}>{u.email}</td>
-                                    <td className="px-4 py-3">
-                                        <span className="px-3 py-1 rounded-full text-xs font-medium capitalize"
-                                            style={{ backgroundColor: rol.bg, color: rol.text }}>
-                                            {u.rol?.replace('_', ' ')}
-                                        </span>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                        <span className="px-3 py-1 rounded-full text-xs font-medium"
-                                            style={{ backgroundColor: u.activo ? '#D1FAE5' : '#FEE2E2', color: u.activo ? '#065F46' : '#991B1B' }}>
-                                            {u.activo ? 'Activo' : 'Inactivo'}
-                                        </span>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                        <div className="flex gap-2">
-                                            <button onClick={() => handleEditar(u)} className="flex items-center gap-1 px-3 py-1 rounded-lg text-sm" style={{ backgroundColor: '#DBEAFE', color: '#1E40AF' }}>
-                                                <Pencil size={14} /> Editar
-                                            </button>
-                                            <button onClick={() => handleEliminar(u.id_usuario)} className="flex items-center gap-1 px-3 py-1 rounded-lg text-sm" style={{ backgroundColor: '#FEE2E2', color: '#991B1B' }}>
-                                                <Trash2 size={14} /> Eliminar
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-                {usuarios.length === 0 && (
-                    <div className="text-center py-12">
-                        <User size={40} className="mx-auto mb-3 opacity-30" style={{ color: c.textSecondary }} />
-                        <p style={{ color: c.textSecondary }}>No hay usuarios registrados.</p>
-                    </div>
                 )}
-            </div>
-        </div>
+            </Modal>
+        </Pagina>
     );
 };
 

@@ -1,161 +1,116 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Building2, Pencil, Ban, RotateCcw } from 'lucide-react';
 import api from '../../services/api';
-import { Plus, Building2, X, Pencil, Trash2 } from 'lucide-react';
-import { useColors } from '../../hooks/useColors';
+import { useAuth } from '../../context/AuthContext';
+import { useLista, useCatalogo } from '../../hooks/useCatalogo';
+import { Pagina, Encabezado, Tabla, Boton, Modal, Campo, Entrada, Selector, Aviso } from '../../components/ui';
+import { useDialogoMotivo, useAvisos } from '../../hooks/useDialogos';
+import { InsigniaActivo } from '../../components/insignias';
+import { DEPARTAMENTOS_GT } from '../../utils/catalogos';
+import { mensajeError } from '../../utils/formato';
+import { puede } from '../../utils/permisos';
+
+const VACIO = { nombre: '', id_tipo_institucion: '', nit: '', unidad_ejecutora: '', departamento: '', direccion: '', telefono: '', email: '', contacto: '' };
 
 const Instituciones = () => {
-    const c = useColors();
-    const [instituciones, setInstituciones] = useState([]);
-    const [mostrarForm, setMostrarForm] = useState(false);
+    const { usuario } = useAuth();
+    const navigate = useNavigate();
+    const { datos: instituciones, recargar, cargando } = useLista('/instituciones');
+    const { datos: tipos } = useCatalogo('tipos-institucion', { activos: true });
+    const [form, setForm] = useState(null);
     const [editando, setEditando] = useState(null);
-    const [form, setForm] = useState({
-        nombre: '', tipo: '', ruc: '',
-        direccion: '', telefono: '', email: ''
-    });
+    const [error, setError] = useState('');
+    const [dialogo, pedirMotivo] = useDialogoMotivo();
+    const [aviso, mostrar] = useAvisos();
 
-    useEffect(() => { cargarInstituciones(); }, []);
-
-    const cargarInstituciones = async () => {
-        const res = await api.get('/instituciones');
-        setInstituciones(res.data);
+    const abrir = (i = null) => {
+        setError('');
+        setEditando(i?.id_institucion || null);
+        setForm(i ? Object.fromEntries(Object.keys(VACIO).map(k => [k, i[k] ?? ''])) : VACIO);
     };
 
-    const handleSubmit = async (e) => {
+    const guardar = async (e) => {
         e.preventDefault();
-        if (editando) {
-            await api.put(`/instituciones/${editando}`, form);
-        } else {
-            await api.post('/instituciones', form);
-        }
-        setMostrarForm(false); setEditando(null);
-        setForm({ nombre: '', tipo: '', ruc: '', direccion: '', telefono: '', email: '' });
-        cargarInstituciones();
+        setError('');
+        try {
+            if (editando) await api.put(`/instituciones/${editando}`, form);
+            else await api.post('/instituciones', form);
+            setForm(null); mostrar('Institución guardada'); recargar();
+        } catch (err) { setError(mensajeError(err)); }
     };
 
-    const handleEditar = (i) => {
-        setEditando(i.id_institucion);
-        setForm({ nombre: i.nombre, tipo: i.tipo, ruc: i.ruc || '', direccion: i.direccion || '', telefono: i.telefono || '', email: i.email || '' });
-        setMostrarForm(true);
+    const anular = async (i) => {
+        const motivo = await pedirMotivo({ titulo: `Anular ${i.nombre}`, peligro: true, confirmar: 'Anular', mensaje: 'No se borra: conserva sus contratos y entregas. Puede restaurarse después.' });
+        if (!motivo) return;
+        try { await api.post(`/instituciones/${i.id_institucion}/anular`, { motivo }); mostrar('Institución anulada'); recargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
-    const handleEliminar = async (id) => {
-        if (window.confirm('¿Estás seguro de eliminar esta institución permanentemente?')) {
-            await api.delete(`/instituciones/${id}`); cargarInstituciones();
-        }
+    const restaurar = async (i) => {
+        try { await api.post(`/instituciones/${i.id_institucion}/restaurar`, {}); mostrar('Institución restaurada'); recargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
-    const handleCancelar = () => {
-        setMostrarForm(false); setEditando(null);
-        setForm({ nombre: '', tipo: '', ruc: '', direccion: '', telefono: '', email: '' });
-    };
-
-    const inputStyle = { backgroundColor: c.inputBg, color: c.inputText, border: `1px solid ${c.inputBorder}`, width: '100%', borderRadius: '8px', padding: '8px 12px', outline: 'none' };
-    const labelStyle = { color: c.textPrimary, fontWeight: '500', display: 'block', marginBottom: '4px' };
+    const campo = (k) => ({ value: form[k], onChange: e => setForm({ ...form, [k]: e.target.value }) });
 
     return (
-        <div className="p-8 min-h-screen" style={{ backgroundColor: c.bg }}>
-            <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl" style={{ backgroundColor: '#C4467A18' }}>
-                        <Building2 size={24} style={{ color: '#C4467A' }} />
-                    </div>
-                    <h1 className="text-3xl font-bold" style={{ color: c.textPrimary }}>Instituciones</h1>
-                </div>
-                <button onClick={() => { setMostrarForm(true); setEditando(null); }}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-white"
-                    style={{ backgroundColor: c.btnPrimary }}>
-                    <Plus size={18} /> Nueva Institución
-                </button>
-            </div>
+        <Pagina>
+            {aviso}{dialogo}
+            <Encabezado icono={Building2} titulo="Instituciones" color="#C4467A"
+                subtitulo="Entidades del Estado a las que se vende por GUATECOMPRAS. Haz clic en una para ver sus contratos y todo lo que se le ha entregado.">
+                {puede(usuario, 'instituciones.escribir') && <Boton icono={Plus} onClick={() => abrir()}>Nueva institución</Boton>}
+            </Encabezado>
 
-            {mostrarForm && (
-                <div className="rounded-xl shadow-sm p-6 mb-6" style={{ backgroundColor: c.card, border: `1px solid ${c.cardBorder}` }}>
-                    <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-bold" style={{ color: c.textPrimary }}>{editando ? 'Editar Institución' : 'Registrar Institución'}</h2>
-                        <button onClick={handleCancelar} style={{ color: c.textSecondary }}><X size={20} /></button>
-                    </div>
-                    <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label style={labelStyle}>Nombre</label>
-                            <input type="text" value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })} style={inputStyle} required />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Tipo</label>
-                            <select value={form.tipo} onChange={e => setForm({ ...form, tipo: e.target.value })} style={inputStyle} required>
-                                <option value="">Seleccionar tipo</option>
-                                <option value="publica">Pública</option>
-                                <option value="privada">Privada</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style={labelStyle}>RUC</label>
-                            <input type="text" value={form.ruc} onChange={e => setForm({ ...form, ruc: e.target.value })} style={inputStyle} />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Teléfono</label>
-                            <input type="text" value={form.telefono} onChange={e => setForm({ ...form, telefono: e.target.value })} style={inputStyle} />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Email</label>
-                            <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} style={inputStyle} />
-                        </div>
-                        <div>
-                            <label style={labelStyle}>Dirección</label>
-                            <input type="text" value={form.direccion} onChange={e => setForm({ ...form, direccion: e.target.value })} style={inputStyle} />
-                        </div>
-                        <div className="col-span-2 flex gap-2">
-                            <button type="submit" className="px-6 py-2 rounded-lg text-white" style={{ backgroundColor: c.btnPrimary }}>
-                                {editando ? 'Actualizar' : 'Guardar'}
-                            </button>
-                            <button type="button" onClick={handleCancelar} className="px-6 py-2 rounded-lg" style={{ backgroundColor: c.inputBg, color: c.textPrimary }}>
-                                Cancelar
-                            </button>
-                        </div>
+            <Tabla
+                claveFila="id_institucion"
+                filas={instituciones}
+                cargando={cargando}
+                alHacerClic={i => navigate(`/instituciones/${i.id_institucion}`)}
+                vacio="No hay instituciones registradas."
+                columnas={[
+                    { clave: 'nombre', titulo: 'Institución', render: i => <span className="font-medium">{i.nombre}</span> },
+                    { clave: 'tipo', titulo: 'Tipo', render: i => i.TipoInstitucion?.nombre },
+                    { clave: 'nit', titulo: 'NIT' },
+                    { clave: 'unidad_ejecutora', titulo: 'Unidad ejecutora' },
+                    { clave: 'departamento', titulo: 'Departamento' },
+                    { clave: 'contacto', titulo: 'Contacto', render: i => <div><div>{i.contacto || '—'}</div><div className="text-xs opacity-70">{i.telefono} {i.email}</div></div> },
+                    { clave: 'activo', titulo: 'Estado', render: i => <InsigniaActivo activo={i.activo} /> },
+                    {
+                        clave: 'acc', titulo: '', render: i => (
+                            <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                                {puede(usuario, 'instituciones.escribir') && i.activo && <Boton pequeno variante="info" icono={Pencil} onClick={() => abrir(i)}>Editar</Boton>}
+                                {puede(usuario, 'instituciones.anular') && (i.activo
+                                    ? <Boton pequeno variante="peligro" icono={Ban} onClick={() => anular(i)}>Anular</Boton>
+                                    : <Boton pequeno variante="exito" icono={RotateCcw} onClick={() => restaurar(i)}>Restaurar</Boton>)}
+                            </div>
+                        )
+                    }
+                ]}
+            />
+
+            <Modal abierto={!!form} titulo={editando ? 'Editar institución' : 'Nueva institución'} alCerrar={() => setForm(null)}
+                pie={<><Boton variante="secundario" onClick={() => setForm(null)}>Cancelar</Boton><Boton type="submit" form="form-inst">Guardar</Boton></>}>
+                {form && (
+                    <form id="form-inst" onSubmit={guardar} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Campo etiqueta="Nombre" obligatorio className="md:col-span-2"><Entrada required {...campo('nombre')} /></Campo>
+                        <Campo etiqueta="Tipo" obligatorio>
+                            <Selector vacio="Seleccionar" required {...campo('id_tipo_institucion')} opciones={tipos.map(t => ({ value: t.id_tipo_institucion, label: t.nombre }))} />
+                        </Campo>
+                        <Campo etiqueta="NIT"><Entrada {...campo('nit')} /></Campo>
+                        <Campo etiqueta="Unidad ejecutora"><Entrada {...campo('unidad_ejecutora')} /></Campo>
+                        <Campo etiqueta="Departamento">
+                            <Selector vacio="Seleccionar" {...campo('departamento')} opciones={DEPARTAMENTOS_GT.map(d => ({ value: d, label: d }))} />
+                        </Campo>
+                        <Campo etiqueta="Dirección" className="md:col-span-2"><Entrada {...campo('direccion')} /></Campo>
+                        <Campo etiqueta="Persona de contacto"><Entrada {...campo('contacto')} /></Campo>
+                        <Campo etiqueta="Teléfono"><Entrada {...campo('telefono')} /></Campo>
+                        <Campo etiqueta="Correo" className="md:col-span-2"><Entrada type="email" {...campo('email')} /></Campo>
+                        {error && <Aviso tono="rojo" className="md:col-span-2">{error}</Aviso>}
                     </form>
-                </div>
-            )}
-
-            <div className="rounded-xl shadow-sm overflow-hidden" style={{ border: `1px solid ${c.cardBorder}` }}>
-                <table className="w-full">
-                    <thead>
-                        <tr style={{ backgroundColor: c.tableHeader }}>
-                            {['Nombre', 'Tipo', 'RUC', 'Teléfono', 'Email', 'Acciones'].map(h => (
-                                <th key={h} className="px-4 py-3 text-left font-medium" style={{ color: c.tableHeaderText }}>{h}</th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {instituciones.map((i) => (
-                            <tr key={i.id_institucion} style={{ backgroundColor: c.tableRow, borderBottom: `1px solid ${c.tableBorder}` }}
-                                onMouseEnter={e => e.currentTarget.style.backgroundColor = c.tableRowHover}
-                                onMouseLeave={e => e.currentTarget.style.backgroundColor = c.tableRow}>
-                                <td className="px-4 py-3 font-medium" style={{ color: '#2B8EA6' }}>{i.nombre}</td>
-                                <td className="px-4 py-3 capitalize" style={{ color: c.textPrimary }}>{i.tipo}</td>
-                                <td className="px-4 py-3" style={{ color: c.textSecondary }}>{i.ruc}</td>
-                                <td className="px-4 py-3" style={{ color: c.textSecondary }}>{i.telefono}</td>
-                                <td className="px-4 py-3" style={{ color: c.textSecondary }}>{i.email}</td>
-                                <td className="px-4 py-3">
-                                    <div className="flex gap-2">
-                                        <button onClick={() => handleEditar(i)} className="flex items-center gap-1 px-3 py-1 rounded-lg text-sm" style={{ backgroundColor: '#DBEAFE', color: '#1E40AF' }}>
-                                            <Pencil size={14} /> Editar
-                                        </button>
-                                        <button onClick={() => handleEliminar(i.id_institucion)} className="flex items-center gap-1 px-3 py-1 rounded-lg text-sm" style={{ backgroundColor: '#FEE2E2', color: '#991B1B' }}>
-                                            <Trash2 size={14} /> Eliminar
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {instituciones.length === 0 && (
-                    <div className="text-center py-12">
-                        <Building2 size={40} className="mx-auto mb-3 opacity-30" style={{ color: c.textSecondary }} />
-                        <p style={{ color: c.textSecondary }}>No hay instituciones registradas.</p>
-                    </div>
                 )}
-            </div>
-        </div>
+            </Modal>
+        </Pagina>
     );
 };
 

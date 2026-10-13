@@ -1,6 +1,9 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
+// Producto genérico (ej. "Lidocaína 2% solución inyectable"). Aparece una sola
+// vez; cada compra se registra como un lote nuevo de este producto y su
+// existencia es la suma de sus lotes.
 const Producto = sequelize.define('Producto', {
     id_producto: {
         type: DataTypes.INTEGER,
@@ -19,14 +22,15 @@ const Producto = sequelize.define('Producto', {
     descripcion: {
         type: DataTypes.TEXT
     },
-    forma_farmaceutica: {
-        type: DataTypes.STRING(100)
+    id_forma_farmaceutica: {
+        type: DataTypes.INTEGER,
+        allowNull: false
     },
     concentracion: {
         type: DataTypes.STRING(100)
     },
-    unidad_medida: {
-        type: DataTypes.STRING(20),
+    id_unidad_medida: {
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     stock_minimo: {

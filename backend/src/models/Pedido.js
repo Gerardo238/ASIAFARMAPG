@@ -1,6 +1,18 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
+// Recorrido de un pedido. "Retrasado" no es un estado: se calcula comparando
+// la fecha programada con la de hoy o con la fecha real de entrega.
+const ESTADOS_PEDIDO = ['pendiente', 'en_preparacion', 'empacado', 'en_transporte', 'entregado', 'anulado'];
+
+// Orden permitido de avance (la anulación se valida aparte)
+const SIGUIENTE_ESTADO = {
+    pendiente: 'en_preparacion',
+    en_preparacion: 'empacado',
+    empacado: 'en_transporte',
+    en_transporte: 'entregado'
+};
+
 const Pedido = sequelize.define('Pedido', {
     id_pedido: {
         type: DataTypes.INTEGER,
@@ -21,19 +33,18 @@ const Pedido = sequelize.define('Pedido', {
         unique: true
     },
     fecha_pedido: {
-        type: DataTypes.DATE,
-        allowNull: false,
-        defaultValue: DataTypes.NOW
+        type: DataTypes.DATEONLY,
+        allowNull: false
     },
     fecha_programada: {
-        type: DataTypes.DATE,
+        type: DataTypes.DATEONLY,
         allowNull: false
     },
     fecha_real_entrega: {
-        type: DataTypes.DATE
+        type: DataTypes.DATEONLY
     },
     estado: {
-        type: DataTypes.ENUM('pendiente', 'en_proceso', 'despachado', 'entregado', 'retrasado'),
+        type: DataTypes.ENUM(...ESTADOS_PEDIDO),
         defaultValue: 'pendiente'
     },
     monto_total: {
@@ -47,5 +58,8 @@ const Pedido = sequelize.define('Pedido', {
     tableName: 'pedidos',
     timestamps: true
 });
+
+Pedido.ESTADOS = ESTADOS_PEDIDO;
+Pedido.SIGUIENTE_ESTADO = SIGUIENTE_ESTADO;
 
 module.exports = Pedido;

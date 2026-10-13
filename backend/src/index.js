@@ -2,16 +2,21 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const sequelize = require('./config/database');
-const models = require('./models/index');
+require('./models/index');
+const { sembrarCatalogos } = require('./seeders/catalogos');
+const { programarVencimientos } = require('./services/vencimientos');
 
 // Rutas
 const authRoutes = require('./routes/authRoutes');
 const productoRoutes = require('./routes/productoRoutes');
+const ingresoRoutes = require('./routes/ingresoRoutes');
 const loteRoutes = require('./routes/loteRoutes');
 const movimientoRoutes = require('./routes/movimientoRoutes');
 const institucionRoutes = require('./routes/institucionRoutes');
 const contratoRoutes = require('./routes/contratoRoutes');
 const pedidoRoutes = require('./routes/pedidoRoutes');
+const catalogoRoutes = require('./routes/catalogoRoutes');
+const consultaRoutes = require('./routes/consultaRoutes');
 
 const app = express();
 
@@ -24,18 +29,26 @@ app.get('/', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/productos', productoRoutes);
+app.use('/api/ingresos', ingresoRoutes);
 app.use('/api/lotes', loteRoutes);
 app.use('/api/movimientos', movimientoRoutes);
 app.use('/api/instituciones', institucionRoutes);
 app.use('/api/contratos', contratoRoutes);
 app.use('/api/pedidos', pedidoRoutes);
+app.use('/api/catalogos', catalogoRoutes);
+app.use('/api', consultaRoutes);
 
+// sync() crea las tablas que falten sin tocar las existentes.
+// Con DB_SYNC=alter en el .env también ajusta columnas (solo en desarrollo);
+// para recrear la base desde cero usa "npm run db:reset".
 sequelize.authenticate()
     .then(() => {
         console.log('Conexión a la base de datos exitosa');
-        return sequelize.sync({ alter: true });
+        return sequelize.sync(process.env.DB_SYNC === 'alter' ? { alter: true } : {});
     })
+    .then(() => sembrarCatalogos())
     .then(() => {
+        programarVencimientos();
         app.listen(process.env.PORT, () => {
             console.log(`Servidor corriendo en el puerto ${process.env.PORT}`);
         });

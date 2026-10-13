@@ -1,10 +1,11 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-// Catálogo de ubicaciones del lote (fase 1 del plan de correcciones).
-// Evita que se escriba texto libre (por ejemplo "en_bodigo") y que luego
-// esos lotes no aparezcan en los filtros y consultas.
-const UBICACIONES_LOTE = ['en_bodega', 'en_empaque', 'en_transporte', 'entregado', 'en_cuarentena', 'vencido'];
+// Condición del lote en bodega. El recorrido de un despacho (preparación,
+// empaque, transporte, entrega) no se guarda aquí sino en el seguimiento del
+// pedido, porque de un mismo lote puede haber unidades en bodega y otras en
+// camino al mismo tiempo.
+const CONDICIONES_LOTE = ['disponible', 'cuarentena', 'bloqueado', 'agotado', 'vencido', 'anulado'];
 
 const Lote = sequelize.define('Lote', {
     id_lote: {
@@ -12,7 +13,15 @@ const Lote = sequelize.define('Lote', {
         primaryKey: true,
         autoIncrement: true
     },
+    id_ingreso: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+    },
     id_producto: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+    },
+    id_laboratorio: {
         type: DataTypes.INTEGER,
         allowNull: false
     },
@@ -21,33 +30,50 @@ const Lote = sequelize.define('Lote', {
         allowNull: false
     },
     fecha_fabricacion: {
-        type: DataTypes.DATE
-    },
-    fecha_vencimiento: {
-        type: DataTypes.DATE,
+        type: DataTypes.DATEONLY,
         allowNull: false
     },
-    cantidad_inicial: {
+    fecha_vencimiento: {
+        type: DataTypes.DATEONLY,
+        allowNull: false
+    },
+    cantidad_recibida: {
         type: DataTypes.DECIMAL(12, 2),
         allowNull: false
     },
     cantidad_disponible: {
         type: DataTypes.DECIMAL(12, 2),
+        allowNull: false,
+        defaultValue: 0
+    },
+    costo_unitario: {
+        type: DataTypes.DECIMAL(12, 2),
+        defaultValue: 0
+    },
+    id_ubicacion: {
+        type: DataTypes.INTEGER,
         allowNull: false
     },
-    ubicacion: {
-        type: DataTypes.ENUM(...UBICACIONES_LOTE),
-        defaultValue: 'en_bodega'
+    condicion: {
+        type: DataTypes.ENUM(...CONDICIONES_LOTE),
+        defaultValue: 'disponible'
     },
-    estado: {
-        type: DataTypes.ENUM('en_bodega', 'en_preparacion', 'despachado', 'entregado', 'vencido'),
-        defaultValue: 'en_bodega'
+    motivo_condicion: {
+        type: DataTypes.TEXT
     }
 }, {
     tableName: 'lotes',
-    timestamps: true
+    timestamps: true,
+    indexes: [{ fields: ['id_producto', 'fecha_vencimiento'] }, { fields: ['numero_lote'] }],
+    validate: {
+        vencimientoPosteriorAFabricacion() {
+            if (this.fecha_fabricacion && this.fecha_vencimiento && this.fecha_vencimiento <= this.fecha_fabricacion) {
+                throw new Error('La fecha de vencimiento debe ser posterior a la fecha de fabricación.');
+            }
+        }
+    }
 });
 
-Lote.UBICACIONES = UBICACIONES_LOTE;
+Lote.CONDICIONES = CONDICIONES_LOTE;
 
 module.exports = Lote;

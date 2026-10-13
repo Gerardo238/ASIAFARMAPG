@@ -17,6 +17,15 @@ export const formatFecha = (valor) => {
     return fecha.toLocaleDateString('es-GT', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
+// Para marcas de tiempo (movimientos, auditoría, seguimiento)
+export const formatFechaHora = (valor) => {
+    if (!valor) return '—';
+    const fecha = new Date(valor);
+    if (isNaN(fecha)) return '—';
+    // Espacios no separables para que fecha y hora no se partan en dos líneas
+    return fecha.toLocaleString('es-GT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(/ /g, ' ');
+};
+
 export const diasRestantes = (valor) => {
     const fecha = parseFecha(valor);
     if (!fecha || isNaN(fecha)) return 0;
@@ -24,3 +33,11 @@ export const diasRestantes = (valor) => {
     hoy.setHours(0, 0, 0, 0);
     return Math.round((fecha - hoy) / (1000 * 60 * 60 * 24));
 };
+
+// Hoy en formato YYYY-MM-DD (hora local), para inputs type="date"
+export const hoyISO = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+export const primerDiaMesISO = () => `${hoyISO().slice(0, 8)}01`;

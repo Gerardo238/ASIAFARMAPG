@@ -1,6 +1,8 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
+// Línea del pedido: qué renglón del contrato y cuánto. Los lotes de los que
+// sale el producto los decide el sistema (FEFO) y quedan en AsignacionLote.
 const DetallePedido = sequelize.define('DetallePedido', {
     id_detalle_pedido: {
         type: DataTypes.INTEGER,
@@ -11,7 +13,7 @@ const DetallePedido = sequelize.define('DetallePedido', {
         type: DataTypes.INTEGER,
         allowNull: false
     },
-    id_lote: {
+    id_detalle_contrato: {
         type: DataTypes.INTEGER,
         allowNull: false
     },
@@ -26,10 +28,6 @@ const DetallePedido = sequelize.define('DetallePedido', {
     precio_unitario: {
         type: DataTypes.DECIMAL(12, 2),
         allowNull: false
-    },
-    descuento: {
-        type: DataTypes.DECIMAL(12, 2),
-        defaultValue: 0
     },
     subtotal: {
         type: DataTypes.DECIMAL(12, 2),

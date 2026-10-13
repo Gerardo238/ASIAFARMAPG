@@ -1,183 +1,141 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Pill, Pencil, Ban, RotateCcw } from 'lucide-react';
 import api from '../../services/api';
-import { Plus, Pill, X, Pencil, Trash2 } from 'lucide-react';
-import { useColors } from '../../hooks/useColors';
+import { useAuth } from '../../context/AuthContext';
+import { useLista, useCatalogo } from '../../hooks/useCatalogo';
+import { Pagina, Encabezado, Tabla, Boton, Modal, Campo, Entrada, Selector, AreaTexto, Aviso, Insignia } from '../../components/ui';
+import { useDialogoMotivo, useAvisos } from '../../hooks/useDialogos';
+import { InsigniaSemaforo, InsigniaActivo } from '../../components/insignias';
+import { formatFecha } from '../../utils/fechas';
+import { numero, mensajeError } from '../../utils/formato';
+import { puede } from '../../utils/permisos';
+
+const VACIO = { codigo: '', nombre: '', concentracion: '', id_forma_farmaceutica: '', id_unidad_medida: '', stock_minimo: 0, descripcion: '' };
 
 const Productos = () => {
-    const c = useColors();
-    const [productos, setProductos] = useState([]);
-    const [mostrarForm, setMostrarForm] = useState(false);
+    const { usuario } = useAuth();
+    const navigate = useNavigate();
+    const { datos: productos, recargar, cargando } = useLista('/productos');
+    const { datos: formas } = useCatalogo('formas-farmaceuticas', { activos: true });
+    const { datos: unidades } = useCatalogo('unidades-medida', { activos: true });
+    const [form, setForm] = useState(null);
     const [editando, setEditando] = useState(null);
-    const [form, setForm] = useState({
-        codigo: '', nombre: '', descripcion: '',
-        forma_farmaceutica: '', concentracion: '',
-        unidad_medida: '', stock_minimo: 0
-    });
+    const [error, setError] = useState('');
+    const [filtro, setFiltro] = useState('');
+    const [verAnulados, setVerAnulados] = useState(false);
+    const [dialogo, pedirMotivo] = useDialogoMotivo();
+    const [aviso, mostrar] = useAvisos();
 
-    useEffect(() => { cargarProductos(); }, []);
-
-    const cargarProductos = async () => {
-        const res = await api.get('/productos');
-        setProductos(res.data);
+    const abrir = (p = null) => {
+        setEditando(p?.id_producto || null);
+        setError('');
+        setForm(p ? {
+            codigo: p.codigo, nombre: p.nombre, concentracion: p.concentracion || '', id_forma_farmaceutica: p.id_forma_farmaceutica,
+            id_unidad_medida: p.id_unidad_medida, stock_minimo: p.stock_minimo, descripcion: p.descripcion || ''
+        } : VACIO);
     };
 
-    const handleSubmit = async (e) => {
+    const guardar = async (e) => {
         e.preventDefault();
-        if (editando) {
-            await api.put(`/productos/${editando}`, form);
-        } else {
-            await api.post('/productos', form);
-        }
-        setMostrarForm(false);
-        setEditando(null);
-        setForm({ codigo: '', nombre: '', descripcion: '', forma_farmaceutica: '', concentracion: '', unidad_medida: '', stock_minimo: 0 });
-        cargarProductos();
+        setError('');
+        try {
+            if (editando) await api.put(`/productos/${editando}`, form);
+            else await api.post('/productos', form);
+            setForm(null);
+            mostrar(editando ? 'Producto actualizado' : 'Producto creado');
+            recargar();
+        } catch (err) { setError(mensajeError(err)); }
     };
 
-    const handleEditar = (p) => {
-        setEditando(p.id_producto);
-        setForm({
-            codigo: p.codigo, nombre: p.nombre, descripcion: p.descripcion || '',
-            forma_farmaceutica: p.forma_farmaceutica || '', concentracion: p.concentracion || '',
-            unidad_medida: p.unidad_medida, stock_minimo: p.stock_minimo
-        });
-        setMostrarForm(true);
+    const anular = async (p) => {
+        const motivo = await pedirMotivo({ titulo: `Anular ${p.nombre}`, peligro: true, confirmar: 'Anular', mensaje: 'El producto no se borra: deja de estar disponible para nuevas operaciones y conserva todo su historial. Puede restaurarse después.' });
+        if (!motivo) return;
+        try { await api.post(`/productos/${p.id_producto}/anular`, { motivo }); mostrar('Producto anulado'); recargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
-    const handleEliminar = async (id) => {
-        if (window.confirm('¿Estás seguro de eliminar este producto permanentemente?')) {
-            await api.delete(`/productos/${id}`);
-            cargarProductos();
-        }
+    const restaurar = async (p) => {
+        try { await api.post(`/productos/${p.id_producto}/restaurar`, {}); mostrar('Producto restaurado'); recargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
-    const handleCancelar = () => {
-        setMostrarForm(false);
-        setEditando(null);
-        setForm({ codigo: '', nombre: '', descripcion: '', forma_farmaceutica: '', concentracion: '', unidad_medida: '', stock_minimo: 0 });
-    };
-
-    const inputStyle = {
-        backgroundColor: c.inputBg, color: c.inputText,
-        border: `1px solid ${c.inputBorder}`, width: '100%',
-        borderRadius: '8px', padding: '8px 12px', outline: 'none'
-    };
-
-    const labelStyle = { color: c.textPrimary, fontWeight: '500', display: 'block', marginBottom: '4px' };
+    const visibles = productos
+        .filter(p => verAnulados || p.activo)
+        .filter(p => !filtro || `${p.codigo} ${p.nombre} ${p.concentracion || ''}`.toLowerCase().includes(filtro.toLowerCase()));
 
     return (
-        <div className="p-8 min-h-screen" style={{ backgroundColor: c.bg }}>
-            <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl" style={{ backgroundColor: '#1F2D6E18' }}>
-                        <Pill size={24} style={{ color: '#1F2D6E' }} />
-                    </div>
-                    <h1 className="text-3xl font-bold" style={{ color: c.textPrimary }}>Productos</h1>
-                </div>
-                <button onClick={() => { setMostrarForm(true); setEditando(null); }}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-white transition"
-                    style={{ backgroundColor: c.btnPrimary }}>
-                    <Plus size={18} /> Nuevo Producto
-                </button>
+        <Pagina>
+            {aviso}{dialogo}
+            <Encabezado icono={Pill} titulo="Productos" subtitulo="Cada producto aparece una sola vez; su existencia es la suma de todos sus lotes. Haz clic en un producto para ver sus lotes.">
+                {puede(usuario, 'productos.escribir') && <Boton icono={Plus} onClick={() => abrir()}>Nuevo producto</Boton>}
+            </Encabezado>
+
+            <div className="flex flex-wrap gap-3 mb-4 items-center">
+                <div className="w-80"><Entrada placeholder="Buscar por código o nombre..." value={filtro} onChange={e => setFiltro(e.target.value)} /></div>
+                <label className="text-sm flex items-center gap-2" style={{ color: 'inherit' }}>
+                    <input type="checkbox" checked={verAnulados} onChange={e => setVerAnulados(e.target.checked)} /> Mostrar anulados
+                </label>
             </div>
 
-            {mostrarForm && (
-                <div className="rounded-xl shadow-sm p-6 mb-6" style={{ backgroundColor: c.card, border: `1px solid ${c.cardBorder}` }}>
-                    <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-bold" style={{ color: c.textPrimary }}>
-                            {editando ? 'Editar Producto' : 'Registrar Producto'}
-                        </h2>
-                        <button onClick={handleCancelar} style={{ color: c.textSecondary }}><X size={20} /></button>
-                    </div>
-                    <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
-                        {[
-                            { label: 'Código', key: 'codigo', type: 'text', required: true },
-                            { label: 'Nombre', key: 'nombre', type: 'text', required: true },
-                            { label: 'Forma Farmacéutica', key: 'forma_farmaceutica', type: 'text' },
-                            { label: 'Concentración', key: 'concentracion', type: 'text' },
-                            { label: 'Unidad de Medida', key: 'unidad_medida', type: 'text', required: true },
-                            { label: 'Stock Mínimo', key: 'stock_minimo', type: 'number' },
-                        ].map(({ label, key, type, required }) => (
-                            <div key={key}>
-                                <label style={labelStyle}>{label}</label>
-                                <input type={type} value={form[key]} required={required}
-                                    onChange={e => setForm({ ...form, [key]: e.target.value })}
-                                    style={inputStyle} />
+            <Tabla
+                claveFila="id_producto"
+                filas={visibles}
+                cargando={cargando}
+                alHacerClic={p => navigate(`/productos/${p.id_producto}`)}
+                vacio="No hay productos registrados."
+                columnas={[
+                    { clave: 'codigo', titulo: 'Código', render: p => <span className="font-medium whitespace-nowrap" style={{ color: '#2B8EA6' }}>{p.codigo}</span> },
+                    { clave: 'nombre', titulo: 'Producto', render: p => <span className="font-medium">{p.nombre} {p.concentracion}</span> },
+                    { clave: 'forma', titulo: 'Forma / unidad', render: p => `${p.FormaFarmaceutica?.nombre || ''} · ${p.UnidadMedida?.nombre || ''}` },
+                    {
+                        clave: 'existencia', titulo: 'Existencia', alinear: 'right', render: p => (
+                            <div>
+                                <span className="font-bold">{numero(p.existencia)}</span>
+                                {p.bajo_minimo && p.activo && <div><Insignia tono="rojo">Bajo mínimo ({numero(p.stock_minimo)})</Insignia></div>}
                             </div>
-                        ))}
-                        <div className="col-span-2">
-                            <label style={labelStyle}>Descripción</label>
-                            <textarea value={form.descripcion} rows="2"
-                                onChange={e => setForm({ ...form, descripcion: e.target.value })}
-                                style={inputStyle} />
-                        </div>
-                        <div className="col-span-2 flex gap-2">
-                            <button type="submit" className="px-6 py-2 rounded-lg text-white transition"
-                                style={{ backgroundColor: c.btnPrimary }}>
-                                {editando ? 'Actualizar' : 'Guardar'}
-                            </button>
-                            <button type="button" onClick={handleCancelar}
-                                className="px-6 py-2 rounded-lg transition"
-                                style={{ backgroundColor: c.inputBg, color: c.textPrimary }}>
-                                Cancelar
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            )}
+                        )
+                    },
+                    { clave: 'despachable', titulo: 'Apta despacho', alinear: 'right', render: p => numero(p.existencia_despachable) },
+                    { clave: 'lotes', titulo: 'Lotes', alinear: 'right', render: p => `${p.lotes_con_existencia} / ${p.total_lotes}` },
+                    { clave: 'proximo', titulo: 'Próximo vencimiento', render: p => p.proximo_vencimiento ? <div className="space-y-1"><div>{formatFecha(p.proximo_vencimiento)}</div><InsigniaSemaforo semaforo={p.semaforo} /></div> : '—' },
+                    { clave: 'activo', titulo: 'Estado', render: p => <InsigniaActivo activo={p.activo} /> },
+                    {
+                        clave: 'acciones', titulo: '', render: p => (
+                            <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                                {puede(usuario, 'productos.escribir') && p.activo && <Boton pequeno variante="info" icono={Pencil} onClick={() => abrir(p)}>Editar</Boton>}
+                                {puede(usuario, 'productos.anular') && (p.activo
+                                    ? <Boton pequeno variante="peligro" icono={Ban} onClick={() => anular(p)}>Anular</Boton>
+                                    : <Boton pequeno variante="exito" icono={RotateCcw} onClick={() => restaurar(p)}>Restaurar</Boton>)}
+                            </div>
+                        )
+                    }
+                ]}
+            />
 
-            <div className="rounded-xl shadow-sm overflow-hidden" style={{ border: `1px solid ${c.cardBorder}` }}>
-                <table className="w-full">
-                    <thead>
-                        <tr style={{ backgroundColor: c.tableHeader }}>
-                            {['Código', 'Nombre', 'Forma Farmacéutica', 'Concentración', 'Unidad', 'Stock Mín.', 'Estado', 'Acciones'].map(h => (
-                                <th key={h} className="px-4 py-3 text-left font-medium" style={{ color: c.tableHeaderText }}>{h}</th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {productos.map((p) => (
-                            <tr key={p.id_producto} style={{ backgroundColor: c.tableRow, borderBottom: `1px solid ${c.tableBorder}` }}
-                                onMouseEnter={e => e.currentTarget.style.backgroundColor = c.tableRowHover}
-                                onMouseLeave={e => e.currentTarget.style.backgroundColor = c.tableRow}>
-                                <td className="px-4 py-3 font-medium" style={{ color: '#2B8EA6' }}>{p.codigo}</td>
-                                <td className="px-4 py-3" style={{ color: c.textPrimary }}>{p.nombre}</td>
-                                <td className="px-4 py-3" style={{ color: c.textSecondary }}>{p.forma_farmaceutica}</td>
-                                <td className="px-4 py-3" style={{ color: c.textSecondary }}>{p.concentracion}</td>
-                                <td className="px-4 py-3" style={{ color: c.textSecondary }}>{p.unidad_medida}</td>
-                                <td className="px-4 py-3" style={{ color: c.textSecondary }}>{p.stock_minimo}</td>
-                                <td className="px-4 py-3">
-                                    <span className="px-3 py-1 rounded-full text-xs font-medium"
-                                        style={{ backgroundColor: p.activo ? '#D1FAE5' : '#FEE2E2', color: p.activo ? '#065F46' : '#991B1B' }}>
-                                        {p.activo ? 'Activo' : 'Inactivo'}
-                                    </span>
-                                </td>
-                                <td className="px-4 py-3">
-                                    <div className="flex gap-2">
-                                        <button onClick={() => handleEditar(p)}
-                                            className="flex items-center gap-1 px-3 py-1 rounded-lg text-sm transition"
-                                            style={{ backgroundColor: '#DBEAFE', color: '#1E40AF' }}>
-                                            <Pencil size={14} /> Editar
-                                        </button>
-                                        <button onClick={() => handleEliminar(p.id_producto)}
-                                            className="flex items-center gap-1 px-3 py-1 rounded-lg text-sm transition"
-                                            style={{ backgroundColor: '#FEE2E2', color: '#991B1B' }}>
-                                            <Trash2 size={14} /> Eliminar
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {productos.length === 0 && (
-                    <div className="text-center py-12">
-                        <Pill size={40} className="mx-auto mb-3 opacity-30" style={{ color: c.textSecondary }} />
-                        <p style={{ color: c.textSecondary }}>No hay productos registrados.</p>
-                    </div>
+            <Modal abierto={!!form} titulo={editando ? 'Editar producto' : 'Nuevo producto'} alCerrar={() => setForm(null)}
+                pie={<><Boton variante="secundario" onClick={() => setForm(null)}>Cancelar</Boton><Boton type="submit" form="form-producto">Guardar</Boton></>}>
+                {form && (
+                    <form id="form-producto" onSubmit={guardar} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Aviso className="md:col-span-2">Registra el producto genérico (ej. "Lidocaína 2% solución inyectable"). El laboratorio, el lote y las fechas se registran en cada <b>ingreso de compra</b>.</Aviso>
+                        <Campo etiqueta="Código" obligatorio><Entrada value={form.codigo} required onChange={e => setForm({ ...form, codigo: e.target.value })} /></Campo>
+                        <Campo etiqueta="Nombre genérico" obligatorio><Entrada value={form.nombre} required onChange={e => setForm({ ...form, nombre: e.target.value })} /></Campo>
+                        <Campo etiqueta="Concentración"><Entrada value={form.concentracion} placeholder="Ej. 2%, 500 mg" onChange={e => setForm({ ...form, concentracion: e.target.value })} /></Campo>
+                        <Campo etiqueta="Forma farmacéutica" obligatorio>
+                            <Selector vacio="Seleccionar" required value={form.id_forma_farmaceutica} onChange={e => setForm({ ...form, id_forma_farmaceutica: e.target.value })}
+                                opciones={formas.map(f => ({ value: f.id_forma_farmaceutica, label: f.nombre }))} />
+                        </Campo>
+                        <Campo etiqueta="Unidad de medida" obligatorio>
+                            <Selector vacio="Seleccionar" required value={form.id_unidad_medida} onChange={e => setForm({ ...form, id_unidad_medida: e.target.value })}
+                                opciones={unidades.map(u => ({ value: u.id_unidad_medida, label: u.nombre }))} />
+                        </Campo>
+                        <Campo etiqueta="Stock mínimo"><Entrada type="number" min="0" value={form.stock_minimo} onChange={e => setForm({ ...form, stock_minimo: e.target.value })} /></Campo>
+                        <Campo etiqueta="Descripción" className="md:col-span-2"><AreaTexto value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })} /></Campo>
+                        {error && <Aviso tono="rojo" className="md:col-span-2">{error}</Aviso>}
+                    </form>
                 )}
-            </div>
-        </div>
+            </Modal>
+        </Pagina>
     );
 };
 

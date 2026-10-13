@@ -1,113 +1,142 @@
-const { Lote, Producto } = require('../models/index');
+// Los lotes nacen solo desde un ingreso de compra (ver ingresoController) y
+// nunca se borran. Aquí se consultan, se corrigen datos (con motivo y
+// auditoría) y se cambia su condición (cuarentena, bloqueo por retiro, ...).
 const { Op } = require('sequelize');
-const { validarFechasLote } = require('../utils/validacionesLote');
+const sequelize = require('../config/database');
+const { Lote, Producto, Laboratorio, Ubicacion, Ingreso, Proveedor } = require('../models/index');
+const { manejarError, ErrorNegocio, exigirTexto } = require('../utils/errores');
+const { registrarAuditoria, instantanea } = require('../utils/auditoria');
+const { obtenerParametros } = require('../services/parametros');
+const { validarFechasLote, semaforo } = require('../services/inventario');
+const { hoy, sumarMeses } = require('../utils/fechas');
 
-// Obtener todos los lotes
+const INCLUDE_LOTE = [
+    { model: Producto, attributes: ['id_producto', 'nombre', 'codigo', 'concentracion'] },
+    { model: Laboratorio, attributes: ['id_laboratorio', 'nombre'] },
+    { model: Ubicacion, attributes: ['id_ubicacion', 'nombre'] },
+    {
+        model: Ingreso, attributes: ['id_ingreso', 'serie_factura', 'numero_factura', 'fecha_recepcion', 'estado'],
+        include: [{ model: Proveedor, attributes: ['id_proveedor', 'nombre'] }]
+    }
+];
+
+const enriquecer = (lote, parametros) => {
+    const datos = lote.get({ plain: true });
+    const fechaMinDespacho = sumarMeses(hoy(), parametros.VIGENCIA_MINIMA_DESPACHO_MESES);
+    return {
+        ...datos,
+        semaforo: semaforo(datos.fecha_vencimiento, parametros),
+        apto_despacho: datos.condicion === 'disponible' && Number(datos.cantidad_disponible) > 0 && datos.fecha_vencimiento >= fechaMinDespacho
+    };
+};
+
+// Filtros: id_producto, id_laboratorio, id_proveedor, condicion, numero_lote
 const getLotes = async (req, res) => {
     try {
-        const lotes = await Lote.findAll({
-            include: [{ model: Producto, attributes: ['nombre', 'codigo'] }]
-        });
-        res.json(lotes);
-    } catch (error) {
-        res.status(500).json({ mensaje: 'Error al obtener lotes', error: error.message });
-    }
+        const parametros = await obtenerParametros();
+        const { id_producto, id_laboratorio, id_proveedor, condicion, numero_lote, con_existencia } = req.query;
+        const where = {};
+        if (id_producto) where.id_producto = id_producto;
+        if (id_laboratorio) where.id_laboratorio = id_laboratorio;
+        if (condicion) where.condicion = condicion;
+        if (numero_lote) where.numero_lote = { [Op.iLike]: `%${numero_lote.trim()}%` };
+        if (con_existencia) where.cantidad_disponible = { [Op.gt]: 0 };
+        if (id_proveedor) where['$Ingreso.id_proveedor$'] = id_proveedor;
+
+        const lotes = await Lote.findAll({ where, include: INCLUDE_LOTE, order: [['fecha_vencimiento', 'ASC'], ['id_lote', 'ASC']] });
+        res.json(lotes.map(l => enriquecer(l, parametros)));
+    } catch (error) { manejarError(res, error, 'Error al obtener lotes'); }
 };
 
-// Obtener lote por ID
 const getLote = async (req, res) => {
     try {
-        const lote = await Lote.findByPk(req.params.id, {
-            include: [{ model: Producto, attributes: ['nombre', 'codigo'] }]
-        });
+        const parametros = await obtenerParametros();
+        const lote = await Lote.findByPk(req.params.id, { include: INCLUDE_LOTE });
         if (!lote) return res.status(404).json({ mensaje: 'Lote no encontrado' });
-        res.json(lote);
-    } catch (error) {
-        res.status(500).json({ mensaje: 'Error al obtener lote', error: error.message });
-    }
+        res.json(enriquecer(lote, parametros));
+    } catch (error) { manejarError(res, error, 'Error al obtener lote'); }
 };
 
-// Crear lote
-const createLote = async (req, res) => {
-    try {
-        const { fecha_fabricacion, fecha_vencimiento } = req.body;
-
-        const validacion = validarFechasLote(fecha_fabricacion, fecha_vencimiento, { esNuevo: true });
-        if (!validacion.valido) {
-            return res.status(400).json({ mensaje: validacion.mensaje });
-        }
-
-        const lote = await Lote.create({
-            ...req.body,
-            ubicacion: req.body.ubicacion || 'en_bodega'
-        });
-        res.status(201).json({ mensaje: 'Lote creado exitosamente', lote });
-    } catch (error) {
-        res.status(500).json({ mensaje: 'Error al crear lote', error: error.message });
-    }
-};
-
-// Actualizar lote
-const updateLote = async (req, res) => {
-    try {
-        const lote = await Lote.findByPk(req.params.id);
-        if (!lote) return res.status(404).json({ mensaje: 'Lote no encontrado' });
-
-        const fecha_fabricacion = req.body.fecha_fabricacion ?? lote.fecha_fabricacion;
-        const fecha_vencimiento = req.body.fecha_vencimiento ?? lote.fecha_vencimiento;
-
-        const validacion = validarFechasLote(fecha_fabricacion, fecha_vencimiento, { esNuevo: false });
-        if (!validacion.valido) {
-            return res.status(400).json({ mensaje: validacion.mensaje });
-        }
-
-        await lote.update(req.body);
-        res.json({ mensaje: 'Lote actualizado exitosamente', lote });
-    } catch (error) {
-        res.status(500).json({ mensaje: 'Error al actualizar lote', error: error.message });
-    }
-};
-
-// Eliminar lote permanentemente
-// NOTA (fase 2 del plan de correcciones): esto se reemplazará por una
-// eliminación lógica (cambio de estado) con registro en la bitácora de
-// auditoría, para poder saber quién eliminó un lote y poder restaurarlo.
-const deleteLote = async (req, res) => {
-    try {
-        const lote = await Lote.findByPk(req.params.id);
-        if (!lote) return res.status(404).json({ mensaje: 'Lote no encontrado' });
-        await lote.destroy();
-        res.json({ mensaje: 'Lote eliminado permanentemente' });
-    } catch (error) {
-        res.status(500).json({ mensaje: 'Error al eliminar lote', error: error.message });
-    }
-};
-
-// Lotes próximos a vencer (semáforo)
+// Lotes con existencia en semáforo rojo/amarillo o ya vencidos
 const getLotesAlerta = async (req, res) => {
     try {
-        const hoy = new Date();
-        const en90dias = new Date();
-        en90dias.setDate(hoy.getDate() + 90);
+        const parametros = await obtenerParametros();
         const lotes = await Lote.findAll({
             where: {
-                fecha_vencimiento: { [Op.lte]: en90dias },
-                estado: { [Op.ne]: 'vencido' }
+                cantidad_disponible: { [Op.gt]: 0 },
+                condicion: { [Op.in]: ['disponible', 'cuarentena', 'bloqueado', 'vencido'] }
             },
-            include: [{ model: Producto, attributes: ['nombre', 'codigo'] }]
+            include: INCLUDE_LOTE,
+            order: [['fecha_vencimiento', 'ASC']]
         });
-        const lotesConSemaforo = lotes.map(lote => {
-            const diasRestantes = Math.ceil((new Date(lote.fecha_vencimiento) - hoy) / (1000 * 60 * 60 * 24));
-            let semaforo = 'verde';
-            if (diasRestantes <= 30) semaforo = 'rojo';
-            else if (diasRestantes <= 90) semaforo = 'amarillo';
-            return { ...lote.toJSON(), diasRestantes, semaforo };
-        });
-        res.json(lotesConSemaforo);
-    } catch (error) {
-        res.status(500).json({ mensaje: 'Error al obtener alertas', error: error.message });
-    }
+        res.json(lotes.map(l => enriquecer(l, parametros)).filter(l => l.semaforo.color !== 'verde'));
+    } catch (error) { manejarError(res, error, 'Error al obtener alertas'); }
 };
 
-module.exports = { getLotes, getLote, createLote, updateLote, getLotesAlerta, deleteLote };
+// Corrección de datos del lote. Las cantidades NO se editan aquí (solo con
+// movimientos). Cambiar fechas es crítico: solo el administrador puede y
+// siempre con motivo; queda el antes y el después en la auditoría.
+const updateLote = async (req, res) => {
+    try {
+        const motivo = exigirTexto(req.body.motivo, 'Indica el motivo de la corrección.');
+        const lote = await Lote.findByPk(req.params.id);
+        if (!lote) return res.status(404).json({ mensaje: 'Lote no encontrado' });
+        if (lote.condicion === 'anulado') throw new ErrorNegocio('El lote pertenece a un ingreso anulado; restaura el ingreso primero.');
 
+        const datos = {};
+        ['numero_lote', 'id_laboratorio', 'id_ubicacion', 'costo_unitario', 'fecha_fabricacion', 'fecha_vencimiento'].forEach(c => {
+            if (req.body[c] !== undefined && req.body[c] !== '' && String(req.body[c]) !== String(lote[c])) datos[c] = req.body[c];
+        });
+        if (Object.keys(datos).length === 0) throw new ErrorNegocio('No hay cambios para guardar.');
+
+        const cambiaFechas = 'fecha_fabricacion' in datos || 'fecha_vencimiento' in datos;
+        if (cambiaFechas && req.usuario.rol !== 'administrador') {
+            throw new ErrorNegocio('Solo un administrador puede cambiar las fechas de un lote.', 403);
+        }
+        if (cambiaFechas) {
+            validarFechasLote({
+                fecha_fabricacion: datos.fecha_fabricacion ?? lote.fecha_fabricacion,
+                fecha_vencimiento: datos.fecha_vencimiento ?? lote.fecha_vencimiento
+            });
+        }
+        if (datos.numero_lote) datos.numero_lote = String(datos.numero_lote).trim().toUpperCase();
+        if (datos.costo_unitario !== undefined && Number(datos.costo_unitario) < 0) throw new ErrorNegocio('El costo no puede ser negativo.');
+
+        await sequelize.transaction(async (transaction) => {
+            const antes = instantanea(lote);
+            // Si la nueva fecha de vencimiento ya pasó, el lote queda vencido;
+            // si se corrige un vencido a una fecha futura, vuelve a disponible.
+            const venc = datos.fecha_vencimiento ?? lote.fecha_vencimiento;
+            if (venc < hoy() && ['disponible', 'agotado'].includes(lote.condicion) && Number(lote.cantidad_disponible) > 0) datos.condicion = 'vencido';
+            if (venc >= hoy() && lote.condicion === 'vencido') datos.condicion = Number(lote.cantidad_disponible) > 0 ? 'disponible' : 'agotado';
+            await lote.update(datos, { transaction });
+            await registrarAuditoria({ req, tabla: 'lotes', id_registro: lote.id_lote, accion: 'editar', antes, despues: lote, motivo, transaction });
+        });
+        res.json({ mensaje: 'Lote actualizado. El cambio quedó registrado en la auditoría.', lote });
+    } catch (error) { manejarError(res, error, 'Error al actualizar lote'); }
+};
+
+// Cuarentena / bloqueo (ej. retiro del mercado por un lote defectuoso) / liberar
+const cambiarCondicion = async (req, res) => {
+    try {
+        const { condicion } = req.body;
+        const motivo = exigirTexto(req.body.motivo, 'Indica el motivo del cambio de condición.');
+        if (!['disponible', 'cuarentena', 'bloqueado'].includes(condicion)) {
+            throw new ErrorNegocio('Condición no válida. Usa disponible, cuarentena o bloqueado.');
+        }
+        const lote = await Lote.findByPk(req.params.id);
+        if (!lote) return res.status(404).json({ mensaje: 'Lote no encontrado' });
+        if (['anulado', 'vencido'].includes(lote.condicion)) throw new ErrorNegocio(`Un lote ${lote.condicion} no puede cambiar de condición.`);
+        if (lote.condicion === condicion) throw new ErrorNegocio(`El lote ya está en ${condicion}.`);
+
+        let nueva = condicion;
+        if (condicion === 'disponible' && Number(lote.cantidad_disponible) === 0) nueva = 'agotado';
+
+        const antes = instantanea(lote);
+        await lote.update({ condicion: nueva, motivo_condicion: motivo });
+        await registrarAuditoria({ req, tabla: 'lotes', id_registro: lote.id_lote, accion: 'cambio_estado', antes, despues: lote, motivo });
+        res.json({ mensaje: `Lote ${lote.numero_lote} ahora está ${nueva}.`, lote });
+    } catch (error) { manejarError(res, error, 'Error al cambiar la condición del lote'); }
+};
+
+module.exports = { getLotes, getLote, getLotesAlerta, updateLote, cambiarCondicion, INCLUDE_LOTE, enriquecer };

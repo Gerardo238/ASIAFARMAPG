@@ -1,6 +1,9 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
+// Kárdex: cada entrada o salida de un lote. Nunca se edita ni se borra; un
+// error se corrige con otro movimiento. Cada movimiento indica su origen
+// (ingreso de compra o pedido) para no perder la trazabilidad.
 const Movimiento = sequelize.define('Movimiento', {
     id_movimiento: {
         type: DataTypes.INTEGER,
@@ -12,20 +15,19 @@ const Movimiento = sequelize.define('Movimiento', {
         allowNull: false
     },
     id_usuario: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+        type: DataTypes.INTEGER
     },
     tipo_movimiento: {
         type: DataTypes.ENUM('entrada', 'salida'),
         allowNull: false
     },
-    entrada: {
-        type: DataTypes.DECIMAL(12, 2),
-        defaultValue: 0
+    id_motivo: {
+        type: DataTypes.INTEGER,
+        allowNull: false
     },
-    salida: {
+    cantidad: {
         type: DataTypes.DECIMAL(12, 2),
-        defaultValue: 0
+        allowNull: false
     },
     saldo: {
         type: DataTypes.DECIMAL(12, 2),
@@ -36,8 +38,11 @@ const Movimiento = sequelize.define('Movimiento', {
         allowNull: false,
         defaultValue: DataTypes.NOW
     },
-    motivo: {
-        type: DataTypes.TEXT
+    id_ingreso: {
+        type: DataTypes.INTEGER
+    },
+    id_pedido: {
+        type: DataTypes.INTEGER
     },
     observacion: {
         type: DataTypes.TEXT
