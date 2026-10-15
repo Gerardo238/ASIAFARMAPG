@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { FileBarChart, Play, FileDown, Sheet } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { FileBarChart, Play, FileDown, Sheet, HelpCircle } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import api from '../../services/api';
@@ -47,7 +48,9 @@ const Informes = () => {
     const { datos: laboratorios } = useCatalogo('laboratorios');
     const { datos: proveedores } = useCatalogo('proveedores');
     const [usuarios, setUsuarios] = useState([]);
-    const [clave, setClave] = useState(null);
+    // El informe elegido vive en la URL (?informe=clave), así el panel puede abrir uno directamente
+    const [url, setUrl] = useSearchParams();
+    const clave = url.get('informe');
     const [params, setParams] = useState({ desde: primerDiaMesISO(), hasta: hoyISO() });
     const [resultado, setResultado] = useState(null);
     const [error, setError] = useState('');
@@ -66,7 +69,7 @@ const Informes = () => {
         id_usuario: usuarios.map(u => ({ value: u.id_usuario, label: `${u.nombre} ${u.apellido}` }))
     };
 
-    const seleccionar = (k) => { setClave(k); setResultado(null); setError(''); };
+    const seleccionar = (k) => { setUrl({ informe: k }); setResultado(null); setError(''); };
 
     const generar = async () => {
         setGenerando(true); setError('');
@@ -94,6 +97,7 @@ const Informes = () => {
         doc.text(`Generado: ${formatFechaHora(resultado.generado)}`, ancho - 10, 21, { align: 'right' });
         let y = 38;
         doc.setTextColor(60, 60, 60);
+        if (resultado.pregunta) { doc.setFont('helvetica', 'italic'); doc.text(resultado.pregunta, 14, y); doc.setFont('helvetica', 'normal'); y += 6; }
         if (resultado.rango) { doc.text(`Período: ${formatFecha(resultado.rango.desde)} al ${formatFecha(resultado.rango.hasta)}`, 14, y); y += 6; }
         if (resultado.resumen) {
             doc.text(Object.entries(resultado.resumen).map(([k, v]) => `${k}: ${typeof v === 'number' && k.toLowerCase().match(/monto|total|saldo|valor|vendido|comprado/) ? moneda(v) : v}`).join('    '), 14, y);
@@ -142,8 +146,9 @@ const Informes = () => {
                                 {catalogo.filter(i => i.grupo === g).map(i => (
                                     <button key={i.clave} onClick={() => seleccionar(i.clave)}
                                         className="w-full text-left px-3 py-2 rounded-lg text-sm transition"
-                                        style={clave === i.clave ? { backgroundColor: '#2B8EA6', color: '#FFFFFF' } : { color: c.textPrimary, backgroundColor: c.inputBg }}>
-                                        {i.titulo}
+                                        style={clave === i.clave ? { backgroundColor: '#3D7EF6', color: '#FFFFFF' } : { color: c.textPrimary, backgroundColor: c.inputBg }}>
+                                        <span className="block font-medium">{i.titulo}</span>
+                                        {i.pregunta && <span className="block text-xs mt-0.5 opacity-75">{i.pregunta}</span>}
                                     </button>
                                 ))}
                             </div>
@@ -153,10 +158,13 @@ const Informes = () => {
 
                 <div className="lg:col-span-3">
                     {!informe ? (
-                        <Aviso>Elige un informe de la lista para generarlo.</Aviso>
+                        <Aviso>Elige en la lista la pregunta que necesitas responder; cada informe se puede exportar a PDF o Excel.</Aviso>
                     ) : (
                         <>
                             <Tarjeta titulo={informe.titulo}>
+                                {informe.pregunta && (
+                                    <p className="text-base font-medium mb-1 flex items-center gap-2" style={{ color: '#3D7EF6' }}><HelpCircle size={18} />{informe.pregunta}</p>
+                                )}
                                 <p className="text-sm mb-4" style={{ color: c.textSecondary }}>{informe.descripcion}</p>
                                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                                     {informe.parametros.map(p => (

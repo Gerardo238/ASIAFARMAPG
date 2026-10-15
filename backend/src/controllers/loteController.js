@@ -3,11 +3,11 @@
 // auditoría) y se cambia su condición (cuarentena, bloqueo por retiro, ...).
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
-const { Lote, Producto, Laboratorio, Ubicacion, Ingreso, Proveedor } = require('../models/index');
+const { Lote, Producto, Laboratorio, Ubicacion, Ingreso, Proveedor, Movimiento, MotivoMovimiento } = require('../models/index');
 const { manejarError, ErrorNegocio, exigirTexto } = require('../utils/errores');
 const { registrarAuditoria, instantanea } = require('../utils/auditoria');
 const { obtenerParametros } = require('../services/parametros');
-const { validarFechasLote, semaforo } = require('../services/inventario');
+const { validarFechasLote, semaforo, registrarMovimiento, obtenerMotivo } = require('../services/inventario');
 const { hoy, sumarMeses } = require('../utils/fechas');
 
 const INCLUDE_LOTE = [
@@ -30,11 +30,12 @@ const enriquecer = (lote, parametros) => {
     };
 };
 
-// Filtros: id_producto, id_laboratorio, id_proveedor, condicion, numero_lote
+// Filtros: buscar (nombre o código del producto, laboratorio o número de lote),
+// id_producto, id_laboratorio, id_proveedor, condicion, numero_lote
 const getLotes = async (req, res) => {
     try {
         const parametros = await obtenerParametros();
-        const { id_producto, id_laboratorio, id_proveedor, condicion, numero_lote, con_existencia } = req.query;
+        const { buscar, id_producto, id_laboratorio, id_proveedor, condicion, numero_lote, con_existencia } = req.query;
         const where = {};
         if (id_producto) where.id_producto = id_producto;
         if (id_laboratorio) where.id_laboratorio = id_laboratorio;
@@ -42,6 +43,15 @@ const getLotes = async (req, res) => {
         if (numero_lote) where.numero_lote = { [Op.iLike]: `%${numero_lote.trim()}%` };
         if (con_existencia) where.cantidad_disponible = { [Op.gt]: 0 };
         if (id_proveedor) where['$Ingreso.id_proveedor$'] = id_proveedor;
+        if (buscar && buscar.trim()) {
+            const texto = `%${buscar.trim()}%`;
+            where[Op.or] = [
+                { numero_lote: { [Op.iLike]: texto } },
+                { '$Producto.nombre$': { [Op.iLike]: texto } },
+                { '$Producto.codigo$': { [Op.iLike]: texto } },
+                { '$Laboratorio.nombre$': { [Op.iLike]: texto } }
+            ];
+        }
 
         const lotes = await Lote.findAll({ where, include: INCLUDE_LOTE, order: [['fecha_vencimiento', 'ASC'], ['id_lote', 'ASC']] });
         res.json(lotes.map(l => enriquecer(l, parametros)));
@@ -139,4 +149,78 @@ const cambiarCondicion = async (req, res) => {
     } catch (error) { manejarError(res, error, 'Error al cambiar la condición del lote'); }
 };
 
-module.exports = { getLotes, getLote, getLotesAlerta, updateLote, cambiarCondicion, INCLUDE_LOTE, enriquecer };
+// Salidas reales del lote (despachos, mermas, ajustes...). Las salidas que
+// hace el propio sistema al anular un lote o su factura no cuentan.
+const CODIGOS_ANULACION = ['ANULACION_INGRESO', 'ANULACION_LOTE'];
+const contarSalidasReales = (id_lote, transaction) => Movimiento.count({
+    where: { id_lote, tipo_movimiento: 'salida' },
+    include: [{ model: MotivoMovimiento, attributes: [], where: { codigo: { [Op.or]: [{ [Op.notIn]: CODIGOS_ANULACION }, { [Op.is]: null }] } } }],
+    transaction
+});
+
+// Caso 9: un lote registrado por error (por ejemplo, duplicado) se anula, no
+// se borra. Deja de contar en la existencia, en FEFO y en las alertas, y
+// un administrador puede restaurarlo. No se permite si ya tuvo salidas,
+// porque rompería la trazabilidad de lo que ya se entregó.
+const anularLote = async (req, res) => {
+    try {
+        const motivoTexto = exigirTexto(req.body?.motivo, 'Indica el motivo de la anulación.');
+        let lote;
+        await sequelize.transaction(async (transaction) => {
+            lote = await Lote.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
+            if (!lote) throw new ErrorNegocio('Lote no encontrado', 404);
+            if (lote.condicion === 'anulado') throw new ErrorNegocio('El lote ya está anulado.');
+            if (await contarSalidasReales(lote.id_lote, transaction)) {
+                throw new ErrorNegocio(`No se puede anular: del lote ${lote.numero_lote} ya salió producto. Corrige con un ajuste o una baja en el Kárdex.`);
+            }
+            const antes = instantanea(lote);
+            if (Number(lote.cantidad_disponible) > 0) {
+                await registrarMovimiento({
+                    lote, tipo: 'salida', cantidad: lote.cantidad_disponible, motivo: await obtenerMotivo('ANULACION_LOTE', transaction),
+                    id_usuario: req.usuario.id, id_ingreso: lote.id_ingreso, observacion: motivoTexto, transaction
+                });
+            }
+            await lote.update({ condicion: 'anulado', motivo_condicion: motivoTexto }, { transaction });
+            await registrarAuditoria({ req, tabla: 'lotes', id_registro: lote.id_lote, accion: 'anular', antes, despues: lote, motivo: motivoTexto, transaction });
+        });
+        res.json({ mensaje: `Lote ${lote.numero_lote} anulado. Un administrador puede restaurarlo si fue un error.` });
+    } catch (error) { manejarError(res, error, 'Error al anular el lote'); }
+};
+
+// Revierte la anulación individual: regresa la misma cantidad que se sacó
+const restaurarLote = async (req, res) => {
+    try {
+        const motivoTexto = exigirTexto(req.body?.motivo, 'Indica el motivo de la restauración.');
+        let lote;
+        await sequelize.transaction(async (transaction) => {
+            lote = await Lote.findByPk(req.params.id, { include: [{ model: Ingreso, attributes: ['estado'] }], transaction, lock: { level: transaction.LOCK.UPDATE, of: Lote } });
+            if (!lote) throw new ErrorNegocio('Lote no encontrado', 404);
+            if (lote.condicion !== 'anulado') throw new ErrorNegocio('El lote no está anulado.');
+            if (lote.Ingreso?.estado === 'anulado') throw new ErrorNegocio('Este lote se anuló junto con su factura; restaura el ingreso de compra.');
+            const salidaAnulacion = await Movimiento.findOne({
+                where: { id_lote: lote.id_lote, tipo_movimiento: 'salida' },
+                include: [{ model: MotivoMovimiento, attributes: [], where: { codigo: 'ANULACION_LOTE' } }],
+                order: [['fecha_movimiento', 'DESC'], ['id_movimiento', 'DESC']],
+                transaction
+            });
+            const antes = instantanea(lote);
+            await lote.update({
+                condicion: lote.fecha_vencimiento < hoy() ? 'vencido' : 'disponible',
+                motivo_condicion: `Restaurado: ${motivoTexto}`
+            }, { transaction });
+            if (salidaAnulacion) {
+                await registrarMovimiento({
+                    lote, tipo: 'entrada', cantidad: salidaAnulacion.cantidad, motivo: await obtenerMotivo('RESTAURACION_LOTE', transaction),
+                    id_usuario: req.usuario.id, id_ingreso: lote.id_ingreso, observacion: motivoTexto, transaction
+                });
+            }
+            await registrarAuditoria({ req, tabla: 'lotes', id_registro: lote.id_lote, accion: 'restaurar', antes, despues: lote, motivo: motivoTexto, transaction });
+        });
+        res.json({ mensaje: `Lote ${lote.numero_lote} restaurado; su existencia regresó al inventario.` });
+    } catch (error) { manejarError(res, error, 'Error al restaurar el lote'); }
+};
+
+module.exports = {
+    getLotes, getLote, getLotesAlerta, updateLote, cambiarCondicion, anularLote, restaurarLote,
+    contarSalidasReales, INCLUDE_LOTE, enriquecer
+};

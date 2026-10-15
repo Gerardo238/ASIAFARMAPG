@@ -21,7 +21,7 @@ const InstitucionDetalle = () => {
 
     return (
         <Pagina>
-            <Encabezado icono={Building2} titulo={institucion.nombre} color="#C4467A" subtitulo={`${institucion.TipoInstitucion?.nombre || ''} · ${institucion.departamento || ''}`}>
+            <Encabezado icono={Building2} titulo={institucion.nombre} color="#A35CF1" subtitulo={`${institucion.TipoInstitucion?.nombre || ''} · ${institucion.departamento || ''}`}>
                 <Boton variante="secundario" icono={ArrowLeft} onClick={() => navigate('/instituciones')}>Instituciones</Boton>
             </Encabezado>
 
@@ -40,7 +40,7 @@ const InstitucionDetalle = () => {
                     alHacerClic={c => navigate(`/contratos/${c.id_contrato}`)}
                     vacio="Sin contratos."
                     columnas={[
-                        { clave: 'numero_contrato', titulo: 'Contrato', render: c => <span style={{ color: '#2B8EA6' }}>{c.numero_contrato}</span> },
+                        { clave: 'numero_contrato', titulo: 'Contrato', render: c => <span style={{ color: '#3D7EF6' }}>{c.numero_contrato}</span> },
                         { clave: 'nog', titulo: 'NOG' },
                         { clave: 'modalidad', titulo: 'Modalidad', render: c => c.ModalidadCompra?.nombre },
                         { clave: 'vigencia', titulo: 'Vigencia', render: c => `${formatFecha(c.fecha_inicio)} – ${formatFecha(c.fecha_fin)}` },
@@ -57,10 +57,10 @@ const InstitucionDetalle = () => {
                     vacio="No se le ha despachado producto."
                     columnas={[
                         { clave: 'fecha', titulo: 'Fecha', render: e => formatFecha(e.fecha) },
-                        { clave: 'pedido', titulo: 'Pedido', render: e => <Link to={`/pedidos/${e.id_pedido}`} style={{ color: '#2B8EA6' }}>{e.numero_pedido}</Link> },
+                        { clave: 'pedido', titulo: 'Pedido', render: e => <Link to={`/pedidos/${e.id_pedido}`} style={{ color: '#3D7EF6' }}>{e.numero_pedido}</Link> },
                         { clave: 'contrato', titulo: 'Contrato / NOG', render: e => `${e.numero_contrato} · ${e.nog}` },
                         { clave: 'producto', titulo: 'Producto' },
-                        { clave: 'lote', titulo: 'Lote', render: e => <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${e.id_lote}`} style={{ color: '#2B8EA6' }}>{e.numero_lote}</Link> },
+                        { clave: 'lote', titulo: 'Lote', render: e => <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${e.id_lote}`} style={{ color: '#3D7EF6' }}>{e.numero_lote}</Link> },
                         { clave: 'laboratorio', titulo: 'Laboratorio' },
                         { clave: 'venc', titulo: 'Vencimiento', render: e => formatFecha(e.fecha_vencimiento) },
                         { clave: 'cantidad', titulo: 'Cantidad', alinear: 'right', render: e => numero(e.cantidad) },

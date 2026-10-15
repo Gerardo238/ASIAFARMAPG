@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Truck, ArrowLeft, PackageCheck, ChevronRight, Ban, CheckCircle2, Circle, Wand2, Pencil } from 'lucide-react';
+import { Truck, ArrowLeft, PackageCheck, ChevronRight, Ban, Wand2, Pencil, Scissors, Building2 } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
-import { useColors } from '../../hooks/useColors';
-import { Pagina, Encabezado, Tarjeta, Tabla, Boton, Modal, Campo, Entrada, AreaTexto, Aviso, DatoFicha, Insignia } from '../../components/ui';
+import { useColors, MARCA } from '../../hooks/useColors';
+import { Pagina, Tarjeta, Tabla, Boton, Modal, Campo, Entrada, AreaTexto, Aviso, DatoFicha, Insignia, CodigoLote } from '../../components/ui';
+import { useTonos } from '../../hooks/useTonos';
 import { useDialogoMotivo, useAvisos } from '../../hooks/useDialogos';
 import { InsigniaPedido } from '../../components/insignias';
 import { ESTADOS_PEDIDO, ORDEN_PEDIDO, ACCION_SIGUIENTE } from '../../utils/catalogos';
@@ -12,10 +13,39 @@ import { formatFecha, formatFechaHora, hoyISO } from '../../utils/fechas';
 import { numero, moneda, mensajeError } from '../../utils/formato';
 import { puede } from '../../utils/permisos';
 
+// Qué sigue en cada etapa y quién lo hace, para que nadie tenga que adivinar
+const PASO_SIGUIENTE = {
+    pendiente: { quien: 'Bodega', texto: 'Revisa los lotes que propone el sistema (primero el que vence antes) y confirma la preparación. Al confirmar se descuenta el inventario.' },
+    en_preparacion: { quien: 'Bodega', texto: 'Separa la mercadería de los lotes asignados y marca el pedido como empacado.' },
+    empacado: { quien: 'Bodega', texto: 'Cuando sale el transporte, marca el pedido "En transporte".' },
+    en_transporte: { quien: 'Encargado de contratos', texto: 'Cuando la institución confirma que recibió, registra la entrega con la fecha real.' },
+    entregado: { quien: null, texto: 'Pedido cerrado. Lo entregado ya cuenta en el avance del contrato.' },
+    anulado: { quien: null, texto: 'Pedido anulado. Su cantidad regresó al saldo del contrato.' }
+};
+
+// Qué se hace en cada etapa (texto bajo el nombre en el recorrido)
+const DESCRIPCION_ETAPA = {
+    pendiente: 'El encargado de contratos registra lo que pidió la institución.',
+    en_preparacion: 'El sistema asigna los lotes por vencimiento y descuenta la existencia.',
+    empacado: 'Bodega separa y empaca la mercadería.',
+    en_transporte: 'La mercadería sale de la droguería.',
+    entregado: 'La institución recibe; se anota la fecha real.'
+};
+
+// Tinte de cada tarjeta del recorrido (como en la referencia, una por etapa)
+const TINTES = {
+    pendiente: { claro: '#FFF8E4', oscuro: '#4A3F1E' },
+    en_preparacion: { claro: '#EEF4FE', oscuro: '#243555' },
+    empacado: { claro: '#F5EEFD', oscuro: '#372A4E' },
+    en_transporte: { claro: '#EEF4FE', oscuro: '#243555' },
+    entregado: { claro: '#EAF6EC', oscuro: '#22402F' }
+};
+
 const PedidoDetalle = () => {
     const { id } = useParams();
     const navigate = useNavigate();
     const c = useColors();
+    const tonos = useTonos();
     const { usuario } = useAuth();
     const [pedido, setPedido] = useState(null);
     const [propuesta, setPropuesta] = useState(null);
@@ -33,7 +63,7 @@ const PedidoDetalle = () => {
     }), [id]);
     useEffect(() => { cargar(); }, [cargar]);
 
-    if (!pedido) return <Pagina><p>Cargando...</p></Pagina>;
+    if (!pedido) return <Pagina><p style={{ color: c.textSecondary }}>Cargando…</p></Pagina>;
 
     const preparar = async () => {
         setProcesando(true);
@@ -49,6 +79,16 @@ const PedidoDetalle = () => {
             const r = await api.post(`/pedidos/${id}/avanzar`, { observacion: avance.observacion, fecha_entrega: avance.fecha_entrega });
             setAvance(null); mostrar(r.data.mensaje); cargar();
         } catch (err) { setError(mensajeError(err)); }
+    };
+
+    const ajustar = async () => {
+        const motivo = await pedirMotivo({
+            titulo: 'Ajustar el pedido a la existencia apta', confirmar: 'Ajustar pedido',
+            mensaje: 'Cada producto se reduce a lo que sí se puede despachar con la vida útil que exige el contrato. Lo que falte regresa al saldo del contrato para pedirlo después. Úsalo si la institución acepta una entrega parcial.'
+        });
+        if (!motivo) return;
+        try { const r = await api.post(`/pedidos/${id}/ajustar`, { motivo }); mostrar(r.data.mensaje); cargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
     const anular = async () => {
@@ -69,124 +109,196 @@ const PedidoDetalle = () => {
     };
 
     const seguimiento = pedido.SeguimientoPedidos || [];
-    const fechaEtapa = (estado) => seguimiento.find(s => s.estado === estado);
+    // La última vez que el pedido pasó por cada etapa
+    const etapa = (estado) => [...seguimiento].reverse().find(s => s.estado === estado);
     const siguiente = ACCION_SIGUIENTE[pedido.estado];
+    const puedeAvanzar = puede(usuario, pedido.estado === 'en_transporte' ? 'pedidos.entregar' : 'pedidos.despachar');
+    const paso = PASO_SIGUIENTE[pedido.estado];
+    const indiceActual = ORDEN_PEDIDO.indexOf(pedido.estado);
+    const lineas = (pedido.DetallePedidos || []).filter(d => Number(d.cantidad) > 0);
+    const unidades = lineas.reduce((s, d) => s + Number(d.cantidad), 0);
+    const puedeEditar = puede(usuario, 'pedidos.crear') && pedido.estado === 'pendiente';
+    const puedeAnular = puede(usuario, 'pedidos.anular') && !['entregado', 'anulado'].includes(pedido.estado);
 
     return (
         <Pagina>
             {aviso}{dialogo}
-            <Encabezado icono={Truck} titulo={`Pedido ${pedido.numero_pedido}`} color="#B85C4A"
-                subtitulo={`${pedido.Contrato?.Institucion?.nombre} · Contrato ${pedido.Contrato?.numero_contrato} · NOG ${pedido.Contrato?.nog}`}>
-                {puede(usuario, 'pedidos.crear') && pedido.estado === 'pendiente' &&
-                    <Boton variante="info" icono={Pencil} onClick={() => { setError(''); setEdicion({ fecha_programada: pedido.fecha_programada, observaciones: pedido.observaciones || '', motivo: '' }); }}>Editar</Boton>}
-                {puede(usuario, 'pedidos.anular') && !['entregado', 'anulado'].includes(pedido.estado) && <Boton variante="peligro" icono={Ban} onClick={anular}>Anular</Boton>}
-                <Boton variante="secundario" icono={ArrowLeft} onClick={() => navigate('/pedidos')}>Pedidos</Boton>
-            </Encabezado>
 
-            {/* Seguimiento: etapas del despacho */}
-            <Tarjeta titulo="Seguimiento del despacho">
-                {pedido.estado === 'anulado' ? <Aviso tono="gris">Pedido anulado: {seguimiento.find(s => s.estado === 'anulado')?.observacion}</Aviso> : (
-                    <div className="flex flex-wrap items-stretch gap-2">
+            <button onClick={() => navigate('/pedidos')} className="af-boton flex items-center gap-1.5 text-[13px] mb-4 hover:underline" style={{ color: c.textSecondary }}>
+                <ArrowLeft size={15} />Pedidos
+            </button>
+
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-x-5">
+                {/* Ficha del pedido */}
+                <Tarjeta className="xl:col-span-2">
+                    <div className="pt-5 flex flex-wrap items-start justify-between gap-4">
+                        <div className="min-w-0">
+                            <p className="flex items-center gap-1.5 text-[11px] tracking-[0.14em]" style={{ color: c.acento }}><Truck size={13} />Pedido</p>
+                            <h1 className=" font-semibold text-[28px] leading-tight mt-1" style={{ color: c.textPrimary }}>{pedido.numero_pedido}</h1>
+                            <p className="flex items-center gap-1.5 text-[15px] mt-1" style={{ color: c.textPrimary }}>
+                                <Building2 size={15} style={{ color: c.textSecondary }} />{pedido.Contrato?.Institucion?.nombre}
+                            </p>
+                            <p className="text-[13px] mt-0.5" style={{ color: c.textSecondary }}>
+                                Contrato <Link to={`/contratos/${pedido.Contrato?.id_contrato}`} className=" hover:underline" style={{ color: c.acento }}>{pedido.Contrato?.numero_contrato}</Link> · NOG <span className="">{pedido.Contrato?.nog}</span>
+                            </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                            <InsigniaPedido valor={pedido.estado} />
+                            {pedido.retrasado && pedido.estado !== 'entregado' && <Insignia tono="rojo">{pedido.dias_retraso} d de retraso</Insignia>}
+                            {pedido.estado === 'entregado' && <Insignia tono={pedido.retrasado ? 'rojo' : 'verde'}>{pedido.retrasado ? `Llegó ${pedido.dias_retraso} d tarde` : 'Entregado a tiempo'}</Insignia>}
+                            {pedido.entrega_proxima && <Insignia tono="amarillo">{pedido.dias_para_entrega === 0 ? 'Se entrega hoy' : `Entrega en ${pedido.dias_para_entrega} d`}</Insignia>}
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-x-5 gap-y-3 mt-5">
+                        <DatoFicha etiqueta="Pedido el" valor={formatFecha(pedido.fecha_pedido)} />
+                        <DatoFicha etiqueta="Entrega programada" valor={formatFecha(pedido.fecha_programada)} />
+                        <DatoFicha etiqueta="Entrega real" valor={pedido.fecha_real_entrega ? formatFecha(pedido.fecha_real_entrega) : '—'} />
+                        <DatoFicha etiqueta="Unidades" valor={numero(unidades)} />
+                        <DatoFicha etiqueta="Monto" valor={moneda(pedido.monto_total)} />
+                    </div>
+                    {pedido.observaciones && <p className="text-[13px] mt-4 italic" style={{ color: c.textSecondary }}>“{pedido.observaciones}”</p>}
+                </Tarjeta>
+
+                {/* Siguiente paso: el bloque de color concentra la acción principal */}
+                <Tarjeta variante="tinta" titulo={pedido.estado === 'entregado' || pedido.estado === 'anulado' ? 'Pedido cerrado' : 'Siguiente paso'}>
+                    {paso.quien && <p className=" text-[10.5px] tracking-[0.14em] mb-1.5" style={{ color: 'rgba(255,255,255,0.8)' }}>Le toca a: {paso.quien}</p>}
+                    <p className="text-[14px] leading-relaxed" style={{ color: '#FFFFFF' }}>{paso.texto}</p>
+                    <div className="mt-5 flex flex-col gap-2">
+                        {pedido.estado === 'pendiente' && propuesta && puede(usuario, 'pedidos.despachar') && (
+                            <Boton variante="claro" icono={PackageCheck} disabled={!propuesta.completo || procesando} onClick={preparar}>
+                                {procesando ? 'Procesando…' : 'Confirmar y preparar despacho'}
+                            </Boton>
+                        )}
+                        {siguiente && puedeAvanzar && (
+                            <Boton variante="claro" icono={ChevronRight} onClick={() => { setError(''); setAvance({ observacion: '', fecha_entrega: hoyISO() }); }}>{siguiente}</Boton>
+                        )}
+                        {(puedeEditar || puedeAnular) && (
+                            <div className="flex gap-2 mt-1">
+                                {puedeEditar && <button onClick={() => { setError(''); setEdicion({ fecha_programada: pedido.fecha_programada, observaciones: pedido.observaciones || '', motivo: '' }); }}
+                                    className="af-boton flex-1 flex items-center justify-center gap-1.5 h-9 rounded-[7px] text-[13px] text-white/85 hover:bg-white/10" style={{ border: '1px solid rgba(255,255,255,0.25)' }}><Pencil size={14} />Editar</button>}
+                                {puedeAnular && <button onClick={anular}
+                                    className="af-boton flex-1 flex items-center justify-center gap-1.5 h-9 rounded-[7px] text-[13px] hover:bg-white/10" style={{ border: '1px solid rgba(243,181,174,0.45)', color: 'rgba(255,255,255,0.8)' }}><Ban size={14} />Anular</button>}
+                            </div>
+                        )}
+                    </div>
+                </Tarjeta>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-x-5">
+                {/* Recorrido del despacho: línea vertical con una tarjeta por etapa */}
+                <Tarjeta titulo="Recorrido del despacho" nota="Quién movió el pedido de etapa y cuándo" className="xl:col-span-2">
+                    {pedido.estado === 'anulado' && <Aviso tono="gris" className="mb-4">Anulado: {etapa('anulado')?.observacion} · {formatFechaHora(etapa('anulado')?.fecha)}</Aviso>}
+                    <ol className="relative">
                         {ORDEN_PEDIDO.map((estado, i) => {
-                            const etapa = fechaEtapa(estado);
-                            const actual = pedido.estado === estado;
+                            const e = etapa(estado);
+                            const hecha = !!e && (pedido.estado === 'anulado' || i <= indiceActual);
+                            const actual = estado === pedido.estado;
+                            const ultima = i === ORDEN_PEDIDO.length - 1;
+                            const tinte = TINTES[estado][c.darkMode ? 'oscuro' : 'claro'];
+                            const colorNodo = estado === 'entregado' && hecha ? MARCA.verde : c.tinta;
                             return (
-                                <div key={estado} className="flex items-center gap-2 flex-1 min-w-40">
-                                    <div className="flex-1 rounded-xl p-3" style={{ backgroundColor: etapa ? (actual ? '#2B8EA622' : c.inputBg) : 'transparent', border: `1px solid ${actual ? '#2B8EA6' : c.inputBorder}` }}>
-                                        <div className="flex items-center gap-1.5">
-                                            {etapa ? <CheckCircle2 size={16} style={{ color: '#2B8EA6' }} /> : <Circle size={16} style={{ color: c.textSecondary }} />}
-                                            <p className="text-sm font-semibold" style={{ color: c.textPrimary }}>{ESTADOS_PEDIDO[estado].label}</p>
-                                        </div>
-                                        {etapa && <p className="text-xs mt-1" style={{ color: c.textSecondary }}>{formatFechaHora(etapa.fecha)}<br />{etapa.Usuario?.nombre} {etapa.Usuario?.apellido}</p>}
-                                        {etapa?.observacion && <p className="text-xs mt-1 italic" style={{ color: c.textSecondary }}>{etapa.observacion}</p>}
+                                <li key={estado} className="relative flex gap-4 pb-3 last:pb-0">
+                                    <div className="relative flex flex-col items-center w-6 shrink-0">
+                                        <span className="mt-5 w-[18px] h-[18px] rounded-full z-10"
+                                            style={{ backgroundColor: hecha ? colorNodo : c.card, border: `2px solid ${hecha || actual ? colorNodo : c.inputBorder}`, boxShadow: actual ? `0 0 0 4px ${c.darkMode ? '#2A3042' : '#E3E7F3'}` : 'none' }} />
+                                        {!ultima && <span className="absolute top-[38px] -bottom-1 w-[2px]" style={{ backgroundColor: i < indiceActual && pedido.estado !== 'anulado' ? c.tinta : c.inputBorder }} />}
                                     </div>
-                                    {i < ORDEN_PEDIDO.length - 1 && <ChevronRight size={16} style={{ color: c.textSecondary }} />}
-                                </div>
+                                    <div className="flex-1 rounded-[10px] px-4 py-3.5" style={{ backgroundColor: hecha ? tinte : 'transparent', border: hecha ? '1px solid transparent' : `1px dashed ${c.inputBorder}` }}>
+                                        <div className="flex flex-wrap items-start justify-between gap-2">
+                                            <div>
+                                                <p className="font-medium text-[14.5px]" style={{ color: hecha ? c.textPrimary : c.textSecondary }}>{ESTADOS_PEDIDO[estado].label}</p>
+                                                <p className="text-[12.5px] mt-0.5" style={{ color: c.textSecondary }}>{DESCRIPCION_ETAPA[estado]}</p>
+                                            </div>
+                                            {hecha
+                                                ? <Insignia tono={actual && estado !== 'entregado' ? 'azul' : 'verde'}>{actual && estado !== 'entregado' ? 'Aquí va' : 'Hecho'}</Insignia>
+                                                : <span className=" text-[10.5px]" style={{ color: c.textSecondary }}>Pendiente</span>}
+                                        </div>
+                                        {e && hecha && (
+                                            <p className="text-[12.5px] mt-2" style={{ color: c.textPrimary }}>
+                                                {formatFechaHora(e.fecha)} · <span className="font-sans">{e.Usuario?.nombre} {e.Usuario?.apellido}</span>
+                                            </p>
+                                        )}
+                                        {e?.observacion && hecha && <p className="text-[12.5px] mt-1 italic" style={{ color: c.textSecondary }}>{e.observacion}</p>}
+                                        {estado === 'entregado' && !hecha && <p className="text-[12.5px] mt-2" style={{ color: c.textSecondary }}>Programado para el <span className="">{formatFecha(pedido.fecha_programada)}</span></p>}
+                                    </div>
+                                </li>
                             );
                         })}
-                    </div>
-                )}
-                {siguiente && puede(usuario, 'pedidos.despachar') && (
-                    <div className="mt-4"><Boton icono={ChevronRight} onClick={() => { setError(''); setAvance({ observacion: '', fecha_entrega: hoyISO() }); }}>{siguiente}</Boton></div>
-                )}
-            </Tarjeta>
+                    </ol>
+                </Tarjeta>
 
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
-                <DatoFicha etiqueta="Estado" valor={<InsigniaPedido valor={pedido.estado} />} />
-                <DatoFicha etiqueta="Fecha del pedido" valor={formatFecha(pedido.fecha_pedido)} />
-                <DatoFicha etiqueta="Entrega programada" valor={formatFecha(pedido.fecha_programada)} />
-                <DatoFicha etiqueta="Entrega real" valor={pedido.fecha_real_entrega ? formatFecha(pedido.fecha_real_entrega) : '—'} />
-                <DatoFicha etiqueta="Retraso" valor={pedido.retrasado ? <Insignia tono="rojo">{pedido.dias_retraso} días</Insignia> : 'A tiempo'} />
-                <DatoFicha etiqueta="Monto" valor={moneda(pedido.monto_total)} />
+                {/* Lo que lleva el pedido, con sus lotes */}
+                <Tarjeta titulo="Contenido" nota={`${lineas.length} producto(s) · ${numero(unidades)} unidades`}>
+                    <div className="space-y-3">
+                        {lineas.map(d => (
+                            <div key={d.id_detalle_pedido} className="pb-3" style={{ borderBottom: `1px dashed ${c.tableBorder}` }}>
+                                <div className="flex justify-between gap-2">
+                                    <p className="text-[14px] font-medium" style={{ color: c.textPrimary }}>{d.Producto?.nombre} <span className="font-normal" style={{ color: c.textSecondary }}>{d.Producto?.concentracion}</span></p>
+                                    <p className=" text-[13px] font-medium shrink-0" style={{ color: c.textPrimary }}>{numero(d.cantidad)}</p>
+                                </div>
+                                <p className="text-[12px]" style={{ color: c.textSecondary }}>Renglón {d.DetalleContrato?.numero_renglon} · {moneda(d.precio_unitario)} c/u · {moneda(d.subtotal)}</p>
+                                {d.AsignacionLotes?.length > 0
+                                    ? <div className="mt-2 space-y-1">
+                                        {d.AsignacionLotes.map(a => (
+                                            <Link key={a.id_asignacion} to={`/trazabilidad/lote/${a.id_lote}`} className="flex items-center justify-between gap-2 rounded-[5px] px-2 py-1 hover:brightness-95" style={{ backgroundColor: c.suave }}>
+                                                <CodigoLote numero={a.Lote?.numero_lote} />
+                                                <span className=" text-[11.5px]" style={{ color: c.textSecondary }}>EXP {formatFecha(a.Lote?.fecha_vencimiento)} · <b style={{ color: c.textPrimary }}>{numero(a.cantidad)}</b></span>
+                                            </Link>
+                                        ))}
+                                    </div>
+                                    : <p className="text-[12px] mt-1.5 italic" style={{ color: c.textSecondary }}>Los lotes se asignan al preparar.</p>}
+                            </div>
+                        ))}
+                    </div>
+                </Tarjeta>
             </div>
 
             {/* Propuesta FEFO antes de preparar */}
             {pedido.estado === 'pendiente' && propuesta && (
-                <Tarjeta titulo="Lotes que se despacharán (FEFO: primero el que vence antes)" icono={Wand2}>
-                    <Aviso className="mb-4">El sistema elige los lotes automáticamente. Solo usa lotes disponibles con al menos <b>{propuesta.vigencia_minima_meses} meses</b> de vida útil, como exige el contrato.</Aviso>
-                    {propuesta.lineas.map(l => (
-                        <div key={l.id_detalle_pedido} className="mb-4">
-                            <div className="flex items-center justify-between mb-2">
-                                <p className="font-semibold" style={{ color: c.textPrimary }}>{l.producto} — {numero(l.cantidad)} unidades</p>
-                                {l.faltante > 0 ? <Insignia tono="rojo">Faltan {numero(l.faltante)} aptas</Insignia> : <Insignia tono="verde">Cubierto</Insignia>}
+                <Tarjeta titulo="Lotes que se despacharán" icono={Wand2}
+                    nota={`El sistema toma primero el lote que vence antes y solo usa lotes con al menos ${propuesta.vigencia_minima_meses} meses de vida útil, como exige el contrato.`}>
+                    <div className="space-y-5">
+                        {propuesta.lineas.filter(l => l.cantidad > 0).map(l => (
+                            <div key={l.id_detalle_pedido}>
+                                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                    <p className="font-medium" style={{ color: c.textPrimary }}>{l.producto} <span className=" text-[13px]" style={{ color: c.textSecondary }}>· {numero(l.cantidad)} unid.</span></p>
+                                    {l.faltante > 0 ? <Insignia tono="rojo">Faltan {numero(l.faltante)} aptas</Insignia> : <Insignia tono="verde">Cubierto</Insignia>}
+                                </div>
+                                <Tabla
+                                    filas={l.asignaciones}
+                                    vacio="No hay lotes aptos para este producto."
+                                    columnas={[
+                                        { clave: 'numero_lote', titulo: 'Lote', render: a => <Link to={`/trazabilidad/lote/${a.id_lote}`}><CodigoLote numero={a.numero_lote} /></Link> },
+                                        { clave: 'laboratorio', titulo: 'Laboratorio' },
+                                        { clave: 'fecha_vencimiento', titulo: 'Vence', render: a => <span className=" text-[13px]">{formatFecha(a.fecha_vencimiento)} <span style={{ color: c.textSecondary }}>({a.dias_para_vencer} d)</span></span> },
+                                        { clave: 'disponible', titulo: 'Disponible', alinear: 'right', render: a => numero(a.disponible) },
+                                        { clave: 'cantidad', titulo: 'Se tomará', alinear: 'right', render: a => <b>{numero(a.cantidad)}</b> }
+                                    ]}
+                                />
+                                {l.excluidos.length > 0 && (
+                                    <p className="text-xs mt-2" style={{ color: c.textSecondary }}>
+                                        No se usan por vida útil insuficiente: {l.excluidos.map(x => `${x.numero_lote} (vence ${formatFecha(x.fecha_vencimiento)}, ${numero(x.disponible)} unid.)`).join('; ')}
+                                    </p>
+                                )}
                             </div>
-                            <Tabla
-                                filas={l.asignaciones}
-                                vacio="No hay lotes aptos para este producto."
-                                columnas={[
-                                    { clave: 'numero_lote', titulo: 'Lote', render: a => <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${a.id_lote}`} style={{ color: '#2B8EA6' }}>{a.numero_lote}</Link> },
-                                    { clave: 'laboratorio', titulo: 'Laboratorio' },
-                                    { clave: 'fecha_vencimiento', titulo: 'Vencimiento', render: a => `${formatFecha(a.fecha_vencimiento)} (${a.dias_para_vencer} d)` },
-                                    { clave: 'disponible', titulo: 'Disponible', alinear: 'right', render: a => numero(a.disponible) },
-                                    { clave: 'cantidad', titulo: 'Se tomará', alinear: 'right', render: a => <b>{numero(a.cantidad)}</b> }
-                                ]}
-                            />
-                            {l.excluidos.length > 0 && (
-                                <p className="text-xs mt-2" style={{ color: c.textSecondary }}>
-                                    Excluidos por vida útil insuficiente: {l.excluidos.map(x => `${x.numero_lote} (vence ${formatFecha(x.fecha_vencimiento)}, ${numero(x.disponible)} unid.)`).join('; ')}
-                                </p>
-                            )}
+                        ))}
+                    </div>
+                    {!propuesta.completo && (
+                        <div className="mt-5 rounded-[8px] p-4" style={{ backgroundColor: tonos.amarillo.bg, borderLeft: `3px solid ${tonos.amarillo.text}` }}>
+                            <p className="text-sm font-medium" style={{ color: c.textPrimary }}>No hay existencia apta para despachar todo. Nunca se descuenta lo que no existe.</p>
+                            <p className="text-sm mt-1" style={{ color: c.textSecondary }}>Espera un ingreso de compra del producto que falta, o ajusta el pedido a lo disponible y pide el resto después si la institución acepta una entrega parcial.</p>
+                            {puede(usuario, 'pedidos.ajustar') && <Boton className="mt-3" variante="secundario" icono={Scissors} onClick={ajustar}>Ajustar el pedido a lo disponible</Boton>}
                         </div>
-                    ))}
-                    {puede(usuario, 'pedidos.despachar') && (
-                        <Boton icono={PackageCheck} disabled={!propuesta.completo || procesando} onClick={preparar}>
-                            {procesando ? 'Procesando...' : 'Confirmar y preparar despacho'}
-                        </Boton>
                     )}
-                    {!propuesta.completo && <Aviso tono="amarillo" className="mt-3">No hay existencia apta suficiente. Registra un ingreso de compra o ajusta el pedido.</Aviso>}
                 </Tarjeta>
             )}
-
-            <Tarjeta titulo="Productos del pedido">
-                <Tabla
-                    claveFila="id_detalle_pedido"
-                    filas={pedido.DetallePedidos || []}
-                    columnas={[
-                        { clave: 'renglon', titulo: 'Renglón', render: d => d.DetalleContrato?.numero_renglon },
-                        { clave: 'producto', titulo: 'Producto', render: d => `${d.Producto?.nombre} ${d.Producto?.concentracion || ''}` },
-                        { clave: 'cantidad', titulo: 'Cantidad', alinear: 'right', render: d => numero(d.cantidad) },
-                        { clave: 'precio', titulo: 'Precio', alinear: 'right', render: d => moneda(d.precio_unitario) },
-                        { clave: 'subtotal', titulo: 'Subtotal', alinear: 'right', render: d => moneda(d.subtotal) },
-                        {
-                            clave: 'lotes', titulo: 'Lotes despachados', render: d => d.AsignacionLotes?.length
-                                ? <div className="space-y-0.5">{d.AsignacionLotes.map(a => (
-                                    <div key={a.id_asignacion} className="text-xs">
-                                        <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${a.id_lote}`} style={{ color: '#2B8EA6' }}>{a.Lote?.numero_lote}</Link> · {a.Lote?.Laboratorio?.nombre} · vence {formatFecha(a.Lote?.fecha_vencimiento)} · <b>{numero(a.cantidad)}</b>
-                                    </div>
-                                ))}</div>
-                                : <span className="text-xs opacity-60">Se asignan al preparar</span>
-                        }
-                    ]}
-                />
-                {pedido.observaciones && <p className="text-sm mt-3" style={{ color: c.textSecondary }}>Observaciones: {pedido.observaciones}</p>}
-            </Tarjeta>
 
             <Modal abierto={!!avance} titulo={siguiente || ''} alCerrar={() => setAvance(null)} ancho="max-w-lg"
                 pie={<><Boton variante="secundario" onClick={() => setAvance(null)}>Cancelar</Boton><Boton type="submit" form="form-avance">Confirmar</Boton></>}>
                 {avance && (
                     <form id="form-avance" onSubmit={avanzar} className="space-y-4">
                         {pedido.estado === 'en_transporte' && (
-                            <Campo etiqueta="Fecha de entrega" obligatorio>
+                            <Campo etiqueta="Fecha en que la institución recibió" obligatorio ayuda={`Programada para el ${formatFecha(pedido.fecha_programada)}. Si es posterior, el sistema calcula los días de retraso.`}>
                                 <Entrada type="date" required max={hoyISO()} min={pedido.fecha_pedido} value={avance.fecha_entrega} onChange={e => setAvance({ ...avance, fecha_entrega: e.target.value })} />
                             </Campo>
                         )}

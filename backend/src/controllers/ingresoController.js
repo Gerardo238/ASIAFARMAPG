@@ -1,7 +1,6 @@
 // Ingresos de compra: la única forma de que entre un lote nuevo al inventario.
 // Cada línea de la factura crea su propio lote (nunca se suma a un lote
 // existente), con su laboratorio, fechas, costo y la factura de origen.
-const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const {
     Ingreso, Lote, Proveedor, Producto, Laboratorio, Ubicacion, Usuario, Movimiento
@@ -10,6 +9,7 @@ const { manejarError, ErrorNegocio, exigirTexto, exigirCantidad } = require('../
 const { registrarAuditoria, instantanea } = require('../utils/auditoria');
 const { obtenerParametro } = require('../services/parametros');
 const { validarFechasLote, registrarMovimiento, obtenerMotivo, redondear } = require('../services/inventario');
+const { contarSalidasReales } = require('./loteController');
 const { hoy, esFechaValida } = require('../utils/fechas');
 
 const INCLUDE_INGRESO = [
@@ -131,16 +131,14 @@ const anularIngreso = async (req, res) => {
             const ingreso = await Ingreso.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
             if (!ingreso) throw new ErrorNegocio('Ingreso no encontrado', 404);
             if (ingreso.estado === 'anulado') throw new ErrorNegocio('El ingreso ya está anulado.');
-            const lotes = await Lote.findAll({ where: { id_ingreso: ingreso.id_ingreso }, transaction, lock: transaction.LOCK.UPDATE });
+            // Los lotes que ya se anularon por separado se quedan como están
+            const lotes = (await Lote.findAll({ where: { id_ingreso: ingreso.id_ingreso }, transaction, lock: transaction.LOCK.UPDATE }))
+                .filter(l => l.condicion !== 'anulado');
             const motivo = await obtenerMotivo('ANULACION_INGRESO', transaction);
 
             for (const lote of lotes) {
                 // Las salidas de una anulación anterior (luego restaurada) no cuentan
-                const salidas = await Movimiento.count({
-                    where: { id_lote: lote.id_lote, tipo_movimiento: 'salida', id_motivo: { [Op.ne]: motivo.id_motivo } },
-                    transaction
-                });
-                if (salidas > 0) {
+                if (await contarSalidasReales(lote.id_lote, transaction)) {
                     throw new ErrorNegocio(`No se puede anular: el lote ${lote.numero_lote} ya tiene salidas registradas. Corrige con un ajuste de inventario.`);
                 }
             }
@@ -172,18 +170,27 @@ const restaurarIngreso = async (req, res) => {
             const ingreso = await Ingreso.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
             if (!ingreso) throw new ErrorNegocio('Ingreso no encontrado', 404);
             if (ingreso.estado !== 'anulado') throw new ErrorNegocio('El ingreso no está anulado.');
-            const lotes = await Lote.findAll({ where: { id_ingreso: ingreso.id_ingreso }, transaction, lock: transaction.LOCK.UPDATE });
+            const lotes = await Lote.findAll({ where: { id_ingreso: ingreso.id_ingreso, condicion: 'anulado' }, transaction, lock: transaction.LOCK.UPDATE });
             const motivo = await obtenerMotivo('RESTAURACION_INGRESO', transaction);
+            const motivoAnulacion = await obtenerMotivo('ANULACION_INGRESO', transaction);
             const fechaHoy = hoy();
 
             for (const lote of lotes) {
+                // Solo vuelven los lotes que salieron con la anulación de la factura
+                // (no los que se anularon antes por separado) y con la misma cantidad
+                const ultima = await Movimiento.findOne({
+                    where: { id_lote: lote.id_lote, tipo_movimiento: 'salida' },
+                    order: [['fecha_movimiento', 'DESC'], ['id_movimiento', 'DESC']],
+                    transaction
+                });
+                if (!ultima || ultima.id_motivo !== motivoAnulacion.id_motivo) continue;
                 const antes = instantanea(lote);
                 await lote.update({
                     condicion: lote.fecha_vencimiento < fechaHoy ? 'vencido' : 'disponible',
                     motivo_condicion: `Restaurado: ${motivoTexto}`
                 }, { transaction });
                 await registrarMovimiento({
-                    lote, tipo: 'entrada', cantidad: lote.cantidad_recibida, motivo, id_usuario: req.usuario.id,
+                    lote, tipo: 'entrada', cantidad: ultima.cantidad, motivo, id_usuario: req.usuario.id,
                     id_ingreso: ingreso.id_ingreso, observacion: motivoTexto, transaction
                 });
                 await registrarAuditoria({ req, tabla: 'lotes', id_registro: lote.id_lote, accion: 'restaurar', antes, despues: lote, motivo: motivoTexto, transaction });

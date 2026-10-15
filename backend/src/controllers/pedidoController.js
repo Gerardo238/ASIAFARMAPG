@@ -12,6 +12,8 @@ const { manejarError, ErrorNegocio, exigirTexto, exigirCantidad } = require('../
 const { registrarAuditoria, instantanea } = require('../utils/auditoria');
 const { proponerFEFO, registrarMovimiento, obtenerMotivo, redondear } = require('../services/inventario');
 const { calcularAvance, verificarContratoCompletado, vigenciaDelContrato } = require('./contratoController');
+const { calcularRetraso, esEntregaProxima } = require('../services/analisis');
+const { obtenerParametro } = require('../services/parametros');
 const { hoy, esFechaValida, diasEntre } = require('../utils/fechas');
 
 const ETIQUETAS = {
@@ -25,23 +27,22 @@ const INCLUDE_CONTRATO = {
     include: [{ model: Institucion, attributes: ['id_institucion', 'nombre', 'departamento'] }]
 };
 
-// Días de retraso: contra hoy si no se ha entregado, o contra la fecha real
-const calcularRetraso = (p) => {
-    if (p.estado === 'anulado') return 0;
-    const referencia = p.estado === 'entregado' ? p.fecha_real_entrega : hoy();
-    return referencia ? Math.max(0, diasEntre(p.fecha_programada, referencia)) : 0;
-};
-
-const conRetraso = (pedido) => {
+// Agrega retraso y la alerta preventiva de entrega (diasAlerta = parámetro DIAS_ALERTA_PEDIDO)
+const conRetraso = (pedido, diasAlerta) => {
     const datos = typeof pedido.get === 'function' ? pedido.get({ plain: true }) : pedido;
     const dias_retraso = calcularRetraso(datos);
-    return { ...datos, dias_retraso, retrasado: dias_retraso > 0 };
+    return {
+        ...datos, dias_retraso, retrasado: dias_retraso > 0,
+        dias_para_entrega: diasEntre(hoy(), datos.fecha_programada),
+        entrega_proxima: esEntregaProxima(datos, diasAlerta)
+    };
 };
 
-// Filtros: estado, id_contrato, id_institucion, retrasados=1
+// Filtros: estado, id_contrato, id_institucion, retrasados=1, proximos=1
 const getPedidos = async (req, res) => {
     try {
-        const { estado, id_contrato, id_institucion, retrasados } = req.query;
+        const { estado, id_contrato, id_institucion, retrasados, proximos } = req.query;
+        const diasAlerta = await obtenerParametro('DIAS_ALERTA_PEDIDO');
         const where = {};
         if (estado) where.estado = estado;
         if (id_contrato) where.id_contrato = id_contrato;
@@ -51,8 +52,9 @@ const getPedidos = async (req, res) => {
             include: [INCLUDE_CONTRATO, { model: Usuario, attributes: ['nombre', 'apellido'] }],
             order: [['fecha_programada', 'DESC'], ['id_pedido', 'DESC']]
         });
-        let lista = pedidos.map(conRetraso);
+        let lista = pedidos.map(p => conRetraso(p, diasAlerta));
         if (retrasados) lista = lista.filter(p => p.retrasado && p.estado !== 'entregado');
+        if (proximos) lista = lista.filter(p => p.entrega_proxima);
         res.json(lista);
     } catch (error) { manejarError(res, error, 'Error al obtener pedidos'); }
 };
@@ -82,7 +84,7 @@ const getPedido = async (req, res) => {
     try {
         const pedido = await cargarPedido(req.params.id);
         if (!pedido) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
-        res.json(conRetraso(pedido));
+        res.json(conRetraso(pedido, await obtenerParametro('DIAS_ALERTA_PEDIDO')));
     } catch (error) { manejarError(res, error, 'Error al obtener pedido'); }
 };
 
@@ -247,6 +249,10 @@ const avanzarPedido = async (req, res) => {
             if (pedido.estado === 'pendiente') throw new ErrorNegocio('Primero prepara el pedido para asignar los lotes.');
             const siguiente = Pedido.SIGUIENTE_ESTADO[pedido.estado];
             if (!siguiente) throw new ErrorNegocio(`Un pedido ${ETIQUETAS[pedido.estado].toLowerCase()} no puede avanzar.`);
+            // El encargado de contratos confirma la entrega con la institución; el empaque y el envío son de bodega
+            if (req.usuario.rol === 'encargado_contratos' && siguiente !== 'entregado') {
+                throw new ErrorNegocio('Bodega es quien marca el pedido como empacado o en transporte.', 403);
+            }
 
             const cambios = { estado: siguiente };
             if (siguiente === 'entregado') {
@@ -265,6 +271,50 @@ const avanzarPedido = async (req, res) => {
         });
         res.json({ mensaje });
     } catch (error) { manejarError(res, error, 'Error al actualizar el estado del pedido'); }
+};
+
+// Caso 4, "si falta mercadería": reduce cada renglón del pedido pendiente a
+// la existencia apta para el contrato. Lo que no se despacha vuelve al saldo
+// del contrato y se puede pedir después. Nunca se descuenta lo que no existe.
+const ajustarPedido = async (req, res) => {
+    try {
+        const motivo = exigirTexto(req.body?.motivo, 'Indica el motivo del ajuste (por ejemplo, la institución acepta una entrega parcial).');
+        let mensaje;
+        await sequelize.transaction(async (transaction) => {
+            const pedido = await Pedido.findByPk(req.params.id, {
+                include: [INCLUDE_CONTRATO, { model: DetallePedido, include: [{ model: Producto, attributes: ['nombre'] }] }],
+                transaction, lock: { level: transaction.LOCK.UPDATE, of: Pedido }
+            });
+            if (!pedido) throw new ErrorNegocio('Pedido no encontrado', 404);
+            if (pedido.estado !== 'pendiente') throw new ErrorNegocio('Solo se puede ajustar un pedido pendiente.');
+            const antes = await cargarPedido(pedido.id_pedido, transaction);
+            const vigencia = await vigenciaDelContrato(pedido.Contrato);
+
+            const cambios = [];
+            for (const d of pedido.DetallePedidos) {
+                const { faltante } = await proponerFEFO({ id_producto: d.id_producto, cantidad: d.cantidad, vigenciaMinimaMeses: vigencia, transaction });
+                if (faltante > 0) cambios.push({ d, apta: redondear(Number(d.cantidad) - faltante), faltante });
+            }
+            if (!cambios.length) throw new ErrorNegocio('El pedido ya está cubierto con la existencia apta; no hace falta ajustarlo.');
+            const quedaAlgo = pedido.DetallePedidos.some(d => {
+                const cambio = cambios.find(x => x.d === d);
+                return cambio ? cambio.apta > 0 : Number(d.cantidad) > 0;
+            });
+            if (!quedaAlgo) throw new ErrorNegocio('No hay existencia apta de ningún producto del pedido. Espera un ingreso de compra o anula el pedido.');
+
+            // El renglón sin existencia apta queda en cero (no se borra) para que se vea qué se pidió
+            for (const { d, apta } of cambios) {
+                await d.update({ cantidad: apta, subtotal: redondear(apta * Number(d.precio_unitario)) }, { transaction });
+            }
+            const monto = redondear(pedido.DetallePedidos.reduce((s, d) => s + Number(d.subtotal), 0));
+            await pedido.update({ monto_total: monto }, { transaction });
+            const detalle = cambios.map(x => `${x.d.Producto.nombre}: -${x.faltante}`).join('; ');
+            await registrarSeguimiento(pedido, 'pendiente', req, `Ajustado a existencia apta (${detalle}). ${motivo}`, transaction);
+            await registrarAuditoria({ req, tabla: 'pedidos', id_registro: pedido.id_pedido, accion: 'editar', antes, despues: await cargarPedido(pedido.id_pedido, transaction), motivo: `Ajuste a existencia apta: ${motivo}`, transaction });
+            mensaje = `Pedido ajustado (${detalle}). Lo que no se despacha regresó al saldo del contrato.`;
+        });
+        res.json({ mensaje });
+    } catch (error) { manejarError(res, error, 'Error al ajustar el pedido'); }
 };
 
 // Anula el pedido; si ya tenía lotes asignados, la existencia regresa a esos lotes
@@ -301,5 +351,5 @@ const anularPedido = async (req, res) => {
 
 module.exports = {
     getPedidos, getPedido, createPedido, updatePedido, getPropuestaFEFO, prepararPedido,
-    avanzarPedido, anularPedido, calcularRetraso, ETIQUETAS
+    avanzarPedido, ajustarPedido, anularPedido, calcularRetraso, ETIQUETAS
 };

@@ -8,7 +8,8 @@
     "dev": "nodemon src/index.js",
     "db:reset": "node src/seeders/reset.js",
     "seed:admin": "node src/seeders/createAdmin.js",
-    "seed:demo": "node src/seeders/demo.js"
+    "seed:demo": "node src/seeders/demo.js",
+    "seed:historial": "node src/seeders/historial.js"
   },
   "keywords": [],
   "author": "",

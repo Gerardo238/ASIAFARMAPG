@@ -57,7 +57,7 @@ const Instituciones = () => {
     return (
         <Pagina>
             {aviso}{dialogo}
-            <Encabezado icono={Building2} titulo="Instituciones" color="#C4467A"
+            <Encabezado icono={Building2} titulo="Instituciones" color="#A35CF1"
                 subtitulo="Entidades del Estado a las que se vende por GUATECOMPRAS. Haz clic en una para ver sus contratos y todo lo que se le ha entregado.">
                 {puede(usuario, 'instituciones.escribir') && <Boton icono={Plus} onClick={() => abrir()}>Nueva institución</Boton>}
             </Encabezado>

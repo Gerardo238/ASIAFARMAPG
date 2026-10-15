@@ -1,0 +1,4 @@
+# graphify: el grafo y su configuración para Claude se quedan solo en la computadora
+graphify-out/
+.claude/
+CLAUDE.md

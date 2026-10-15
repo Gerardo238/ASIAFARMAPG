@@ -37,7 +37,7 @@ const ContratoDetalle = () => {
     return (
         <Pagina>
             {aviso}{dialogo}
-            <Encabezado icono={FileText} titulo={`Contrato ${contrato.numero_contrato}`} color="#C4467A" subtitulo={`NOG ${contrato.nog} · ${contrato.Institucion?.nombre}`}>
+            <Encabezado icono={FileText} titulo={`Contrato ${contrato.numero_contrato}`} color="#A35CF1" subtitulo={`NOG ${contrato.nog} · ${contrato.Institucion?.nombre}`}>
                 {puede(usuario, 'pedidos.crear') && contrato.estado === 'vigente' &&
                     <Boton icono={Truck} onClick={() => navigate(`/pedidos?contrato=${contrato.id_contrato}`)}>Nuevo pedido</Boton>}
                 {puede(usuario, 'contratos.escribir') && editable && <Boton variante="info" icono={Pencil} onClick={() => setEditar(true)}>Editar</Boton>}
@@ -67,7 +67,7 @@ const ContratoDetalle = () => {
                     filas={contrato.renglones}
                     columnas={[
                         { clave: 'numero_renglon', titulo: 'Renglón', alinear: 'right' },
-                        { clave: 'producto', titulo: 'Producto', render: r => <Link to={`/productos/${r.id_producto}`} style={{ color: '#2B8EA6' }}>{r.Producto?.nombre} {r.Producto?.concentracion}</Link> },
+                        { clave: 'producto', titulo: 'Producto', render: r => <Link to={`/productos/${r.id_producto}`} style={{ color: '#3D7EF6' }}>{r.Producto?.nombre} {r.Producto?.concentracion}</Link> },
                         { clave: 'unidad', titulo: 'Unidad', render: r => r.Producto?.UnidadMedida?.nombre },
                         { clave: 'contratada', titulo: 'Contratado', alinear: 'right', render: r => numero(r.cantidad_contratada) },
                         { clave: 'pedida', titulo: 'Pedido', alinear: 'right', render: r => numero(r.cantidad_pedida) },
@@ -86,7 +86,7 @@ const ContratoDetalle = () => {
                     alHacerClic={p => navigate(`/pedidos/${p.id_pedido}`)}
                     vacio="Sin pedidos."
                     columnas={[
-                        { clave: 'numero_pedido', titulo: 'Pedido', render: p => <span style={{ color: '#2B8EA6' }}>{p.numero_pedido}</span> },
+                        { clave: 'numero_pedido', titulo: 'Pedido', render: p => <span style={{ color: '#3D7EF6' }}>{p.numero_pedido}</span> },
                         { clave: 'fecha_programada', titulo: 'Programada', render: p => formatFecha(p.fecha_programada) },
                         { clave: 'fecha_real_entrega', titulo: 'Entregado', render: p => formatFecha(p.fecha_real_entrega) },
                         { clave: 'monto', titulo: 'Monto', alinear: 'right', render: p => moneda(p.monto_total) },

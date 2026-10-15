@@ -53,7 +53,7 @@ const Movimientos = () => {
     return (
         <Pagina>
             {aviso}
-            <Encabezado icono={ArrowUpDown} titulo="Kárdex de inventario" color="#2B8EA6"
+            <Encabezado icono={ArrowUpDown} titulo="Kárdex de inventario" color="#3D7EF6"
                 subtitulo="Todas las entradas y salidas por lote. Las compras se registran en Ingresos y las ventas salen de Pedidos; aquí solo se registran ajustes.">
                 {puede(usuario, 'movimientos.ajuste') && <Boton icono={Plus} onClick={() => { setError(''); setForm({ id_producto: '', id_lote: '', id_motivo: '', cantidad: '', observacion: '' }); }}>Registrar ajuste</Boton>}
             </Encabezado>
@@ -74,13 +74,13 @@ const Movimientos = () => {
                 columnas={[
                     { clave: 'fecha', titulo: 'Fecha', render: m => formatFechaHora(m.fecha_movimiento) },
                     { clave: 'producto', titulo: 'Producto', render: m => m.Lote?.Producto?.nombre },
-                    { clave: 'lote', titulo: 'Lote', render: m => <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${m.id_lote}`} style={{ color: '#2B8EA6' }}>{m.Lote?.numero_lote}</Link> },
+                    { clave: 'lote', titulo: 'Lote', render: m => <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${m.id_lote}`} style={{ color: '#3D7EF6' }}>{m.Lote?.numero_lote}</Link> },
                     { clave: 'motivo', titulo: 'Motivo', render: m => <Insignia tono={m.tipo_movimiento === 'entrada' ? 'verde' : 'rojo'}>{m.tipo_movimiento === 'entrada' ? '↑' : '↓'} {m.MotivoMovimiento?.nombre}</Insignia> },
                     { clave: 'cantidad', titulo: 'Cantidad', alinear: 'right', render: m => <b style={{ color: m.tipo_movimiento === 'entrada' ? '#065F46' : '#991B1B' }}>{m.tipo_movimiento === 'entrada' ? '+' : '-'}{numero(m.cantidad)}</b> },
                     { clave: 'saldo', titulo: 'Saldo lote', alinear: 'right', render: m => numero(m.saldo) },
                     {
                         clave: 'ref', titulo: 'Origen / destino', render: m => m.Pedido
-                            ? <div><Link to={`/pedidos/${m.Pedido.id_pedido}`} style={{ color: '#2B8EA6' }}>{m.Pedido.numero_pedido}</Link><div className="text-xs opacity-70">{m.Pedido.Contrato?.Institucion?.nombre} · Contrato {m.Pedido.Contrato?.numero_contrato}</div></div>
+                            ? <div><Link to={`/pedidos/${m.Pedido.id_pedido}`} style={{ color: '#3D7EF6' }}>{m.Pedido.numero_pedido}</Link><div className="text-xs opacity-70">{m.Pedido.Contrato?.Institucion?.nombre} · Contrato {m.Pedido.Contrato?.numero_contrato}</div></div>
                             : m.Ingreso ? `Factura ${m.Ingreso.serie_factura}-${m.Ingreso.numero_factura}` : <span className="text-xs">{m.observacion}</span>
                     },
                     { clave: 'usuario', titulo: 'Usuario', render: m => m.Usuario ? `${m.Usuario.nombre} ${m.Usuario.apellido}` : 'Sistema' }

@@ -11,6 +11,8 @@ import { InsigniaIngreso, InsigniaCondicion } from '../../components/insignias';
 import { formatFecha, hoyISO } from '../../utils/fechas';
 import { numero, moneda, mensajeError } from '../../utils/formato';
 import { puede } from '../../utils/permisos';
+import Adjuntos from '../../components/Adjuntos';
+import { subirAdjunto, ACEPTA } from '../../utils/adjuntos';
 
 const LINEA_VACIA = { id_producto: '', id_laboratorio: '', numero_lote: '', fecha_fabricacion: '', fecha_vencimiento: '', cantidad: '', costo_unitario: '', id_ubicacion: '' };
 
@@ -47,6 +49,7 @@ const Ingresos = () => {
     const [error, setError] = useState('');
     const [guardando, setGuardando] = useState(false);
     const [detalle, setDetalle] = useState(null);
+    const [archivoFactura, setArchivoFactura] = useState(null);
     const [dialogo, pedirMotivo] = useDialogoMotivo();
     const [aviso, mostrar] = useAvisos();
 
@@ -71,8 +74,15 @@ const Ingresos = () => {
         setGuardando(true);
         try {
             const res = await api.post('/ingresos', { ...form, lotes: form.lotes.map(l => ({ ...l, id_ubicacion: l.id_ubicacion || ubicacionPorDefecto })) });
+            // La foto o PDF de la factura se adjunta después de crear el ingreso
+            let nota = '';
+            if (archivoFactura) {
+                try { await subirAdjunto('ingresos', res.data.ingreso.id_ingreso, archivoFactura, 'Factura'); nota = ' La factura quedó adjunta.'; }
+                catch (err) { nota = ` No se pudo adjuntar la factura (${err.response ? mensajeError(err) : err.message}); puedes adjuntarla desde el detalle.`; }
+            }
             setForm(null);
-            mostrar(res.data.mensaje);
+            setArchivoFactura(null);
+            mostrar(res.data.mensaje + nota, nota.startsWith(' No') ? 'amarillo' : 'verde');
             recargar();
         } catch (err) { setError(mensajeError(err)); }
         finally { setGuardando(false); }
@@ -102,7 +112,7 @@ const Ingresos = () => {
     return (
         <Pagina>
             {aviso}{dialogo}
-            <Encabezado icono={PackagePlus} titulo="Ingresos de compra" color="#2B8EA6"
+            <Encabezado icono={PackagePlus} titulo="Ingresos de compra" color="#3D7EF6"
                 subtitulo="Cada factura de proveedor ingresa uno o varios lotes nuevos. Es la única forma de agregar producto al inventario.">
                 {puede(usuario, 'ingresos.crear') && <Boton icono={Plus} onClick={nuevo}>Registrar ingreso</Boton>}
             </Encabezado>
@@ -115,7 +125,7 @@ const Ingresos = () => {
                 vacio="No hay ingresos registrados."
                 columnas={[
                     { clave: 'fecha_recepcion', titulo: 'Recepción', render: i => formatFecha(i.fecha_recepcion) },
-                    { clave: 'factura', titulo: 'Factura', render: i => <span className="font-medium whitespace-nowrap" style={{ color: '#2B8EA6' }}>{i.serie_factura}-{i.numero_factura}</span> },
+                    { clave: 'factura', titulo: 'Factura', render: i => <span className="font-medium whitespace-nowrap" style={{ color: '#3D7EF6' }}>{i.serie_factura}-{i.numero_factura}</span> },
                     { clave: 'fecha_factura', titulo: 'Fecha factura', render: i => formatFecha(i.fecha_factura) },
                     { clave: 'proveedor', titulo: 'Proveedor', render: i => <div><div>{i.Proveedor?.nombre}</div><div className="text-xs opacity-70">NIT {i.Proveedor?.nit}</div></div> },
                     { clave: 'lotes', titulo: 'Lotes', alinear: 'right', render: i => i.total_lotes },
@@ -145,7 +155,13 @@ const Ingresos = () => {
                             <div />
                             <Campo etiqueta="Fecha de la factura" obligatorio><Entrada type="date" required max={hoyISO()} value={form.fecha_factura} onChange={e => setForm({ ...form, fecha_factura: e.target.value })} /></Campo>
                             <Campo etiqueta="Fecha de recepción" obligatorio ayuda="Día en que el producto entró a bodega."><Entrada type="date" required max={hoyISO()} value={form.fecha_recepcion} onChange={e => setForm({ ...form, fecha_recepcion: e.target.value })} /></Campo>
-                            <Campo etiqueta="Observaciones" className="md:col-span-3"><Entrada value={form.observaciones} onChange={e => setForm({ ...form, observaciones: e.target.value })} /></Campo>
+                            <Campo etiqueta="Observaciones" className="md:col-span-2"><Entrada value={form.observaciones} onChange={e => setForm({ ...form, observaciones: e.target.value })} /></Campo>
+                            <Campo etiqueta="Foto o PDF de la factura" ayuda={archivoFactura ? archivoFactura.name : 'Opcional. En el teléfono abre la cámara.'}>
+                                <label className="af-campo flex items-center justify-center gap-2 h-[38px] rounded-lg text-[13px] cursor-pointer" style={{ border: `1px dashed ${c.inputBorder}`, color: c.textPrimary }}>
+                                    {archivoFactura ? 'Cambiar archivo' : 'Elegir o tomar foto'}
+                                    <input type="file" accept={ACEPTA} hidden onChange={e => setArchivoFactura(e.target.files[0] || null)} />
+                                </label>
+                            </Campo>
                         </div>
                         {proveedores.length === 0 && <Aviso tono="amarillo" className="mb-4">No hay proveedores registrados. Agrégalos en Catálogos → Proveedores.</Aviso>}
 
@@ -213,7 +229,7 @@ const Ingresos = () => {
                             columnas={[
                                 { clave: 'producto', titulo: 'Producto', render: l => `${l.Producto?.nombre} ${l.Producto?.concentracion || ''}` },
                                 { clave: 'lab', titulo: 'Laboratorio', render: l => l.Laboratorio?.nombre },
-                                { clave: 'lote', titulo: 'Lote', render: l => <span className="whitespace-nowrap" style={{ color: '#2B8EA6' }}>{l.numero_lote}</span> },
+                                { clave: 'lote', titulo: 'Lote', render: l => <span className="whitespace-nowrap" style={{ color: '#3D7EF6' }}>{l.numero_lote}</span> },
                                 { clave: 'fab', titulo: 'Fabricación', render: l => formatFecha(l.fecha_fabricacion) },
                                 { clave: 'venc', titulo: 'Vencimiento', render: l => formatFecha(l.fecha_vencimiento) },
                                 { clave: 'cant', titulo: 'Recibido', alinear: 'right', render: l => numero(l.cantidad_recibida) },
@@ -223,6 +239,7 @@ const Ingresos = () => {
                             ]}
                         />
                         {detalle.observaciones && <p className="text-sm mt-3" style={{ color: c.textSecondary }}>Observaciones: {detalle.observaciones}</p>}
+                        <div className="mt-5 -mx-6 -mb-6"><Adjuntos entidad="ingresos" id={detalle.id_ingreso} titulo="Factura adjunta" className="mb-0!" /></div>
                     </>
                 )}
             </Modal>

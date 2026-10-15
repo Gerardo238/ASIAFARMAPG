@@ -1,8 +1,53 @@
 @import "tailwindcss";
 
+/* Tipografía local (funciona sin internet) */
+@import "@fontsource/manrope/400.css";
+@import "@fontsource/manrope/500.css";
+@import "@fontsource/manrope/600.css";
+@import "@fontsource/manrope/700.css";
+
+@theme {
+  --font-sans: "Manrope", "Segoe UI", system-ui, sans-serif;
+}
+
 :root {
-  --color-primary: #1F2D6E;
-  --color-secondary: #2B8EA6;
-  --color-accent: #C4467A;
-  --color-terra: #B85C4A;
+  /* Colores de la marca, tomados del logotipo */
+  --af-tinta: #1B2A5E;
+  --af-rojo: #D0453A;
+  --af-azul: #3D7EF6;
+  --af-magenta: #B4467E;
+  /* Foco de los campos (Layout los redefine según el tema) */
+  --af-foco: #3D7EF6;
+  --af-foco-suave: rgba(61, 126, 246, 0.18);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Cifras alineadas en columnas */
+.cifras,
+table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.af-campo {
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.af-campo:focus {
+  border-color: var(--af-foco) !important;
+  box-shadow: 0 0 0 3px var(--af-foco-suave);
+  outline: none;
+}
+
+.af-boton:focus-visible {
+  outline: 2px solid var(--af-foco);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(110, 120, 145, 0.35) transparent;
 }

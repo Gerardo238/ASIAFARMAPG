@@ -48,11 +48,12 @@ const aplanarDestino = (a) => ({
     departamento: a.DetallePedido.Pedido.Contrato.Institucion.departamento
 });
 
-// GET /trazabilidad/buscar?id_laboratorio&id_producto&id_proveedor&id_institucion&numero_lote&desde&hasta
+// GET /trazabilidad/buscar?texto&id_laboratorio&id_producto&id_proveedor&id_institucion&numero_lote&desde&hasta
+// texto busca a la vez en lote, producto, laboratorio, proveedor, factura e instituciones que lo recibieron
 const buscar = async (req, res) => {
     try {
         const parametros = await obtenerParametros();
-        const { id_laboratorio, id_producto, id_proveedor, id_institucion, numero_lote, desde, hasta } = req.query;
+        const { texto, id_laboratorio, id_producto, id_proveedor, id_institucion, numero_lote, desde, hasta } = req.query;
         const where = {};
         if (id_laboratorio) where.id_laboratorio = id_laboratorio;
         if (id_producto) where.id_producto = id_producto;
@@ -74,6 +75,7 @@ const buscar = async (req, res) => {
 
         if (id_institucion) lotes = lotes.filter(l => (porLote[l.id_lote] || []).some(d => String(d.id_institucion) === String(id_institucion)));
 
+        const buscado = String(texto || '').trim().toLowerCase();
         res.json(lotes.map(l => {
             const entregas = (porLote[l.id_lote] || []).filter(d => !id_institucion || String(d.id_institucion) === String(id_institucion));
             return {
@@ -81,7 +83,10 @@ const buscar = async (req, res) => {
                 cantidad_despachada: entregas.reduce((s, d) => s + d.cantidad, 0),
                 instituciones: [...new Set(entregas.map(d => d.institucion))]
             };
-        }));
+        }).filter(l => !buscado || [
+            l.numero_lote, l.Producto?.nombre, l.Producto?.codigo, l.Laboratorio?.nombre, l.Ingreso?.Proveedor?.nombre,
+            l.Ingreso && `${l.Ingreso.serie_factura}-${l.Ingreso.numero_factura}`, ...l.instituciones
+        ].some(v => v && String(v).toLowerCase().includes(buscado))));
     } catch (error) { manejarError(res, error, 'Error en la búsqueda de trazabilidad'); }
 };
 

@@ -1,16 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { GitBranch, ArrowLeft, Factory, Warehouse, Building2, History, ShieldAlert, ArrowUpDown, CheckCircle2 } from 'lucide-react';
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
+import { ArrowLeft, ShieldAlert, PackageOpen, Send, Warehouse, CalendarClock, AlertTriangle } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
-import { useColors } from '../../hooks/useColors';
-import { Pagina, Encabezado, Tarjeta, Tabla, Boton, DatoFicha, Insignia } from '../../components/ui';
+import { useColors, MARCA } from '../../hooks/useColors';
+import { useTonos } from '../../hooks/useTonos';
+import { Pagina, Encabezado, Pildora, Tarjeta, Tabla, Boton, Indicador, Etapas } from '../../components/ui';
 import { useDialogoMotivo, useAvisos } from '../../hooks/useDialogos';
-import { InsigniaSemaforo, InsigniaCondicion, InsigniaPedido } from '../../components/insignias';
+import { InsigniaSemaforo, InsigniaCondicion } from '../../components/insignias';
 import { ESTADOS_PEDIDO, ACCIONES_AUDITORIA } from '../../utils/catalogos';
-import { formatFecha, formatFechaHora } from '../../utils/fechas';
+import { formatFecha, formatFechaHora, tiempoRestante } from '../../utils/fechas';
 import { numero, moneda, mensajeError } from '../../utils/formato';
 import { puede } from '../../utils/permisos';
+import Adjuntos from '../../components/Adjuntos';
 
 const CAMPOS_LOTE = {
     numero_lote: 'No. lote', fecha_fabricacion: 'Fabricación', fecha_vencimiento: 'Vencimiento', id_laboratorio: 'Laboratorio',
@@ -25,20 +28,15 @@ const cambiosDe = (a) => {
         .map(k => `${CAMPOS_LOTE[k]}: ${a.datos_antes[k] ?? '—'} → ${a.datos_despues[k] ?? '—'}`);
 };
 
-const Paso = ({ icono: Icono, titulo, children, color }) => {
-    const c = useColors();
-    return (
-        <div className="flex-1 min-w-56 rounded-xl p-4" style={{ backgroundColor: c.inputBg, borderTop: `4px solid ${color}` }}>
-            <div className="flex items-center gap-2 mb-2"><Icono size={18} style={{ color }} /><p className="font-bold text-sm" style={{ color: c.textPrimary }}>{titulo}</p></div>
-            <div className="text-sm space-y-0.5" style={{ color: c.textSecondary }}>{children}</div>
-        </div>
-    );
-};
+// Colores de la dona: uno por institución y gris claro para lo que queda en bodega
+const PALETA = [MARCA.morado, MARCA.azul, MARCA.amarillo, MARCA.verde, MARCA.magenta, MARCA.ocre];
+const TONO_PEDIDO = { pendiente: 'amarillo', en_preparacion: 'azul', empacado: 'morado', en_transporte: 'azul', entregado: 'verde', anulado: 'gris' };
 
 const TrazabilidadLote = () => {
     const { id } = useParams();
     const navigate = useNavigate();
     const c = useColors();
+    const tonos = useTonos();
     const { usuario } = useAuth();
     const [datos, setDatos] = useState(null);
     const [dialogo, pedirMotivo] = useDialogoMotivo();
@@ -47,9 +45,23 @@ const TrazabilidadLote = () => {
     const cargar = useCallback(() => api.get(`/trazabilidad/lote/${id}`).then(r => setDatos(r.data)), [id]);
     useEffect(() => { cargar(); }, [cargar]);
 
-    if (!datos) return <Pagina><p>Cargando...</p></Pagina>;
+    if (!datos) return <Pagina><p style={{ color: c.textSecondary }}>Cargando…</p></Pagina>;
     const { lote, movimientos, destinos, cambios } = datos;
     const despachado = destinos.reduce((s, d) => s + d.cantidad, 0);
+    const disponible = Number(lote.cantidad_disponible);
+    const retenido = ['bloqueado', 'cuarentena', 'vencido', 'anulado'].includes(lote.condicion);
+
+    // Unidades por institución (para la dona y su leyenda)
+    const porInstitucion = Object.values(destinos.reduce((acc, d) => {
+        const g = acc[d.institucion] || (acc[d.institucion] = { nombre: d.institucion, valor: 0, entregas: 0 });
+        g.valor += d.cantidad; g.entregas += 1;
+        return acc;
+    }, {})).map((g, i) => ({ ...g, color: PALETA[i % PALETA.length] }));
+    const dona = [...porInstitucion, ...(disponible > 0 ? [{ nombre: 'En bodega', valor: disponible, color: c.riel }] : [])];
+    const totalDona = dona.reduce((s, x) => s + x.valor, 0);
+
+    // Fecha de la última etapa de cada entrega
+    const ultimaEtapa = (d) => d.seguimiento[d.seguimiento.length - 1];
 
     const bloquear = async () => {
         const motivo = await pedirMotivo({ titulo: `Bloquear lote ${lote.numero_lote}`, peligro: true, confirmar: 'Bloquear lote', mensaje: 'El lote dejará de despacharse. Úsalo ante un retiro del mercado, una alerta sanitaria o un reporte de reacción adversa.' });
@@ -58,101 +70,145 @@ const TrazabilidadLote = () => {
         catch (err) { mostrar(mensajeError(err), 'rojo'); }
     };
 
+    const fila = (etiqueta, valor) => (
+        <div className="flex justify-between gap-4 py-2.5" style={{ borderTop: `1px solid ${c.tableBorder}` }}>
+            <span className="text-[12.5px]" style={{ color: c.textSecondary }}>{etiqueta}</span>
+            <span className="text-[13px] font-medium text-right" style={{ color: c.textPrimary }}>{valor}</span>
+        </div>
+    );
 
     return (
         <Pagina>
             {aviso}{dialogo}
-            <Encabezado icono={GitBranch} titulo={`Lote ${lote.numero_lote}`} color="#2B8EA6"
-                subtitulo={`${lote.Producto?.nombre} ${lote.Producto?.concentracion || ''} · ${lote.Producto?.codigo}`}>
+            <Encabezado titulo={`Lote ${lote.numero_lote}`}>
+                <Pildora>{lote.Producto?.nombre} {lote.Producto?.concentracion} · {lote.Producto?.codigo}</Pildora>
+                <InsigniaCondicion valor={lote.condicion} />
+                <Boton variante="secundario" pequeno icono={ArrowLeft} onClick={() => navigate(-1)}>Volver</Boton>
                 {puede(usuario, 'lotes.editar') && !['bloqueado', 'anulado', 'vencido'].includes(lote.condicion) &&
-                    <Boton variante="peligro" icono={ShieldAlert} onClick={bloquear}>Bloquear lote (retiro)</Boton>}
-                <Boton variante="secundario" icono={ArrowLeft} onClick={() => navigate(-1)}>Volver</Boton>
+                    <Boton variante="peligro" pequeno icono={ShieldAlert} onClick={bloquear}>Bloquear (retiro)</Boton>}
             </Encabezado>
 
-            {/* Recorrido: origen -> bodega -> destinos */}
-            <div className="flex flex-wrap gap-3 mb-6">
-                <Paso icono={Factory} titulo="Origen" color="#1F2D6E">
-                    <p>Fabricante: <b>{lote.Laboratorio?.nombre}</b> {lote.Laboratorio?.pais && `(${lote.Laboratorio.pais})`}</p>
-                    <p>Proveedor: <b>{lote.Ingreso?.Proveedor?.nombre}</b> · NIT {lote.Ingreso?.Proveedor?.nit}</p>
-                    <p>Factura {lote.Ingreso?.serie_factura}-{lote.Ingreso?.numero_factura} del {formatFecha(lote.Ingreso?.fecha_factura)}</p>
-                    <p>Recibido el {formatFecha(lote.Ingreso?.fecha_recepcion)} por {lote.Ingreso?.Usuario?.nombre} {lote.Ingreso?.Usuario?.apellido}</p>
-                </Paso>
-                <Paso icono={Warehouse} titulo="En bodega" color="#2B8EA6">
-                    <p>Recibido: <b>{numero(lote.cantidad_recibida)}</b> · Disponible: <b>{numero(lote.cantidad_disponible)}</b></p>
-                    <p>Ubicación: {lote.Ubicacion?.nombre}</p>
-                    <div className="flex flex-wrap gap-1 pt-1"><InsigniaCondicion valor={lote.condicion} /><InsigniaSemaforo semaforo={lote.semaforo} /></div>
-                    {lote.motivo_condicion && <p className="text-xs pt-1">Motivo: {lote.motivo_condicion}</p>}
-                </Paso>
-                <Paso icono={Building2} titulo="Destinos" color="#C4467A">
-                    <p>Despachado: <b>{numero(despachado)}</b> en {destinos.length} entrega(s)</p>
-                    {[...new Set(destinos.map(d => d.institucion))].map(i => <p key={i}>• {i}</p>)}
-                    {destinos.length === 0 && <p>Todavía no se ha despachado.</p>}
-                </Paso>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
-                <DatoFicha etiqueta="Fabricación" valor={formatFecha(lote.fecha_fabricacion)} />
-                <DatoFicha etiqueta="Vencimiento" valor={formatFecha(lote.fecha_vencimiento)} />
-                <DatoFicha etiqueta="Costo unitario" valor={moneda(lote.costo_unitario)} />
-                <DatoFicha etiqueta="Apto para despacho" valor={lote.apto_despacho ? 'Sí' : 'No'} />
-                <DatoFicha etiqueta="Fecha de ingreso al sistema" valor={formatFechaHora(lote.createdAt)} />
-                <DatoFicha etiqueta="Ingreso" valor={<Link to="/ingresos" style={{ color: '#2B8EA6' }}>Ver ingresos</Link>} />
-            </div>
-
-            <Tarjeta titulo="Destinos: a quién se entregó" icono={Building2}>
-                {destinos.length === 0 ? <p className="text-sm" style={{ color: c.textSecondary }}>Este lote no se ha despachado a ninguna institución.</p> : (
-                    <div className="space-y-3">
-                        {destinos.map((d, i) => (
-                            <div key={i} className="rounded-xl p-4" style={{ backgroundColor: c.inputBg }}>
-                                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                                    <div>
-                                        <p className="font-bold" style={{ color: c.textPrimary }}>{d.institucion} {d.departamento && <span className="font-normal text-sm">({d.departamento})</span>}</p>
-                                        <p className="text-sm" style={{ color: c.textSecondary }}>
-                                            <Link to={`/pedidos/${d.id_pedido}`} style={{ color: '#2B8EA6' }}>{d.numero_pedido}</Link> · Contrato {d.numero_contrato} · NOG {d.nog} · <b>{numero(d.cantidad)}</b> unidades
-                                        </p>
-                                    </div>
-                                    <InsigniaPedido valor={d.estado} />
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {d.seguimiento.map(s => (
-                                        <div key={s.id_seguimiento} className="flex items-center gap-1.5 text-xs rounded-lg px-2 py-1" style={{ backgroundColor: c.card, color: c.textPrimary }}>
-                                            <CheckCircle2 size={14} style={{ color: '#2B8EA6' }} />
-                                            <b>{ESTADOS_PEDIDO[s.estado]?.label || s.estado}</b> {formatFechaHora(s.fecha)} · {s.Usuario?.nombre} {s.Usuario?.apellido}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        ))}
+            {/* Si el lote está retenido, lo primero que se ve es por qué */}
+            {retenido && lote.motivo_condicion && (
+                <div className="flex items-start gap-3 rounded-xl px-5 py-4 mb-5" style={{ backgroundColor: tonos.rojo.fila }}>
+                    <AlertTriangle size={18} className="mt-0.5 shrink-0" style={{ color: MARCA.rojo }} />
+                    <div className="text-[13px]" style={{ color: c.textPrimary }}>
+                        <b className="font-semibold">Lote {lote.condicion}.</b> {lote.motivo_condicion}
+                        {destinos.length > 0 && <span style={{ color: c.textSecondary }}> · Ya se entregó a {porInstitucion.length} institución(es): están en la tabla de abajo.</span>}
                     </div>
-                )}
-            </Tarjeta>
+                </div>
+            )}
 
-            <Tarjeta titulo="Kárdex del lote" icono={ArrowUpDown}>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 mb-5">
+                <Indicador etiqueta="Recibido" icono={PackageOpen} valor={numero(lote.cantidad_recibida)}
+                    detalle={`Factura ${lote.Ingreso?.serie_factura}-${lote.Ingreso?.numero_factura} · ${formatFecha(lote.Ingreso?.fecha_recepcion)}`} />
+                <Indicador etiqueta="Salió" icono={Send} valor={numero(despachado)}
+                    detalle={destinos.length ? `En ${destinos.length} entrega(s) a ${porInstitucion.length} institución(es)` : 'Todavía no sale de bodega'} />
+                <Indicador etiqueta="Queda en bodega" icono={Warehouse} valor={numero(disponible)} alerta={retenido && disponible > 0}
+                    detalle={retenido && disponible > 0 ? 'Retenido: no se puede despachar' : `${lote.Ubicacion?.nombre} · ${lote.apto_despacho ? 'apto para despacho' : 'no apto para despacho'}`} />
+                <Indicador etiqueta="Vence" icono={CalendarClock} valor={formatFecha(lote.fecha_vencimiento)}
+                    detalle={tiempoRestante(lote.semaforo.dias)} alerta={lote.semaforo.color === 'rojo' || lote.semaforo.color === 'vencido'} />
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-4 gap-5">
+                <Tarjeta titulo="A dónde se fue" className="xl:col-span-2 mb-0!">
+                    <div className="flex items-center gap-6">
+                        <div className="relative w-[170px] h-[170px] shrink-0">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie data={totalDona ? dona : [{ valor: 1, color: c.riel }]} dataKey="valor" innerRadius={52} outerRadius={82} startAngle={90} endAngle={-270} stroke="none" isAnimationActive={false}>
+                                        {(totalDona ? dona : [{ color: c.riel }]).map((x, i) => <Cell key={i} fill={x.color} />)}
+                                    </Pie>
+                                    <Tooltip contentStyle={{ borderRadius: 10, border: 'none', backgroundColor: c.card, color: c.textPrimary, fontSize: 12 }} formatter={(v, n, p) => [`${numero(v)} unid.`, p.payload.nombre]} />
+                                </PieChart>
+                            </ResponsiveContainer>
+                            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                <span className="text-[22px] font-medium" style={{ color: c.textPrimary }}>{numero(lote.cantidad_recibida)}</span>
+                                <span className="text-[10.5px]" style={{ color: c.textSecondary }}>recibidas</span>
+                            </div>
+                        </div>
+                        <div className="flex-1 space-y-2.5">
+                            {dona.map(x => (
+                                <div key={x.nombre} className="flex items-center gap-2.5">
+                                    <span className="w-3 h-2 rounded-full shrink-0" style={{ backgroundColor: x.nombre === 'En bodega' ? (c.darkMode ? '#5A5A6A' : '#C9D6F0') : x.color }} />
+                                    <span className="flex-1 text-[13px] truncate" style={{ color: c.textPrimary }}>{x.nombre}</span>
+                                    <span className="text-[13px] font-semibold" style={{ color: c.textPrimary }}>{numero(x.valor)}</span>
+                                    <span className="text-[11px] w-10 text-right" style={{ color: c.textSecondary }}>{totalDona ? Math.round((x.valor / Number(lote.cantidad_recibida)) * 100) : 0}%</span>
+                                </div>
+                            ))}
+                            {!destinos.length && <p className="text-[12.5px]" style={{ color: c.textSecondary }}>Todavía no se ha entregado a ninguna institución.</p>}
+                        </div>
+                    </div>
+                </Tarjeta>
+
+                <Tarjeta titulo="De dónde vino" className="xl:col-span-2 mb-0!">
+                    {fila('Fabricante', `${lote.Laboratorio?.nombre}${lote.Laboratorio?.pais ? ` · ${lote.Laboratorio.pais}` : ''}`)}
+                    {fila('Proveedor', <>{lote.Ingreso?.Proveedor?.nombre} <span style={{ color: c.textSecondary }}>· NIT {lote.Ingreso?.Proveedor?.nit}</span></>)}
+                    {fila('Factura', `${lote.Ingreso?.serie_factura}-${lote.Ingreso?.numero_factura} del ${formatFecha(lote.Ingreso?.fecha_factura)}`)}
+                    {fila('Recibido', `${formatFecha(lote.Ingreso?.fecha_recepcion)} por ${lote.Ingreso?.Usuario?.nombre || ''} ${lote.Ingreso?.Usuario?.apellido || ''}`)}
+                    {fila('Fabricación / vencimiento', `${formatFecha(lote.fecha_fabricacion)} → ${formatFecha(lote.fecha_vencimiento)}`)}
+                    {fila('Costo unitario', moneda(lote.costo_unitario))}
+                    {fila('Semáforo', <InsigniaSemaforo semaforo={lote.semaforo} />)}
+                </Tarjeta>
+            </div>
+
+            <div className="mt-5">
+                <Tarjeta titulo="A quién se entregó" nota="Una fila por entrega. Haz clic para abrir el pedido." sinPadding>
+                    <Tabla
+                        claveFila="id_pedido"
+                        filas={destinos}
+                        tonoFila={d => TONO_PEDIDO[d.estado]}
+                        alHacerClic={d => navigate(`/pedidos/${d.id_pedido}`)}
+                        vacio="Este lote no se ha despachado a ninguna institución."
+                        columnas={[
+                            { clave: 'inst', titulo: 'Institución', render: d => <div><p className="font-semibold">{d.institucion}</p><p className="text-[11px]" style={{ color: c.textSecondary }}>{d.departamento}</p></div> },
+                            { clave: 'pedido', titulo: 'Pedido', render: d => <Link to={`/pedidos/${d.id_pedido}`} onClick={e => e.stopPropagation()} className="font-medium hover:underline" style={{ color: MARCA.azul }}>{d.numero_pedido}</Link> },
+                            { clave: 'contrato', titulo: 'Contrato', render: d => <div><p>{d.numero_contrato}</p><p className="text-[11px]" style={{ color: c.textSecondary }}>NOG {d.nog}</p></div> },
+                            { clave: 'cant', titulo: 'Unidades', alinear: 'right', render: d => <b className="font-semibold">{numero(d.cantidad)}</b> },
+                            {
+                                clave: 'etapa', titulo: 'Etapa', render: d => (
+                                    <div><p className="text-[12.5px] mb-1.5">{ESTADOS_PEDIDO[d.estado]?.label}{d.fecha_entrega ? ` el ${formatFecha(d.fecha_entrega)}` : ''}</p><Etapas estado={d.estado} /></div>
+                                )
+                            },
+                            { clave: 'ult', titulo: 'Último movimiento', render: d => { const u = ultimaEtapa(d); return u ? <div><p className="text-[12.5px]">{formatFechaHora(u.fecha)}</p><p className="text-[11px]" style={{ color: c.textSecondary }}>{u.Usuario?.nombre} {u.Usuario?.apellido}</p></div> : '—'; } }
+                        ]}
+                    />
+                </Tarjeta>
+            </div>
+
+            <Tarjeta titulo="Kárdex del lote" nota="Cada entrada y salida, con el saldo que quedó" sinPadding>
                 <Tabla
                     claveFila="id_movimiento"
                     filas={movimientos}
                     columnas={[
-                        { clave: 'fecha', titulo: 'Fecha', render: m => formatFechaHora(m.fecha_movimiento) },
-                        { clave: 'motivo', titulo: 'Motivo', render: m => <Insignia tono={m.tipo_movimiento === 'entrada' ? 'verde' : 'rojo'}>{m.MotivoMovimiento?.nombre}</Insignia> },
-                        { clave: 'cant', titulo: 'Cantidad', alinear: 'right', render: m => `${m.tipo_movimiento === 'entrada' ? '+' : '-'}${numero(m.cantidad)}` },
-                        { clave: 'saldo', titulo: 'Saldo', alinear: 'right', render: m => <b>{numero(m.saldo)}</b> },
-                        { clave: 'ref', titulo: 'Referencia', render: m => m.Pedido ? `${m.Pedido.numero_pedido} · ${m.Pedido.Contrato?.Institucion?.nombre}` : m.Ingreso ? `Factura ${m.Ingreso.serie_factura}-${m.Ingreso.numero_factura}` : m.observacion },
+                        { clave: 'fecha', titulo: 'Fecha', render: m => <span className="whitespace-nowrap">{formatFechaHora(m.fecha_movimiento)}</span> },
+                        { clave: 'motivo', titulo: 'Movimiento', render: m => m.MotivoMovimiento?.nombre },
+                        { clave: 'ref', titulo: 'Referencia', render: m => <span style={{ color: c.textSecondary }}>{m.Pedido ? `${m.Pedido.numero_pedido} · ${m.Pedido.Contrato?.Institucion?.nombre}` : m.Ingreso ? `Factura ${m.Ingreso.serie_factura}-${m.Ingreso.numero_factura}` : m.observacion}</span> },
+                        { clave: 'cant', titulo: 'Cantidad', alinear: 'right', render: m => <span className="font-semibold" style={{ color: m.tipo_movimiento === 'entrada' ? MARCA.verde : MARCA.rojo }}>{m.tipo_movimiento === 'entrada' ? '+' : '−'}{numero(m.cantidad)}</span> },
+                        { clave: 'saldo', titulo: 'Saldo', alinear: 'right', render: m => <b className="font-semibold">{numero(m.saldo)}</b> },
                         { clave: 'usuario', titulo: 'Usuario', render: m => m.Usuario ? `${m.Usuario.nombre} ${m.Usuario.apellido}` : 'Sistema' }
                     ]}
                 />
             </Tarjeta>
 
-            <Tarjeta titulo="Historial de cambios (auditoría)" icono={History}>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-5">
+                <Adjuntos entidad="ingresos" id={lote.id_ingreso} titulo="Factura de compra"
+                    nota={`Foto o PDF de la factura ${lote.Ingreso?.serie_factura}-${lote.Ingreso?.numero_factura}`} />
+                <Adjuntos entidad="lotes" id={lote.id_lote} titulo="Documentos del lote" tipoInicial="Certificado de análisis"
+                    nota="Certificado de análisis, actas de destrucción o retiro" />
+            </div>
+
+            <Tarjeta titulo="Historial de cambios" nota="Quién cambió algo de este lote, cuándo y por qué" sinPadding>
                 <Tabla
                     claveFila="id_auditoria"
                     filas={cambios}
                     vacio="Sin cambios registrados."
                     columnas={[
-                        { clave: 'fecha', titulo: 'Fecha', render: a => formatFechaHora(a.fecha) },
+                        { clave: 'fecha', titulo: 'Fecha', render: a => <span className="whitespace-nowrap">{formatFechaHora(a.fecha)}</span> },
                         { clave: 'usuario', titulo: 'Usuario', render: a => a.Usuario ? `${a.Usuario.nombre} ${a.Usuario.apellido}` : 'Sistema' },
                         { clave: 'accion', titulo: 'Acción', render: a => ACCIONES_AUDITORIA[a.accion] || a.accion },
-                        { clave: 'cambios', titulo: 'Qué cambió', render: a => <div className="text-xs space-y-0.5">{cambiosDe(a).map(t => <div key={t}>{t}</div>)}</div> },
-                        { clave: 'motivo', titulo: 'Motivo', render: a => a.motivo || '—' }
+                        { clave: 'cambios', titulo: 'Qué cambió', render: a => <div className="text-[12px] space-y-0.5">{cambiosDe(a).map(t => <div key={t}>{t}</div>)}</div> },
+                        { clave: 'motivo', titulo: 'Motivo', render: a => <span style={{ color: c.textSecondary }}>{a.motivo || '—'}</span> }
                     ]}
                 />
             </Tarjeta>

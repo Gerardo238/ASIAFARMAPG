@@ -1,28 +1,64 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Truck } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useLista } from '../../hooks/useCatalogo';
-import { useColors } from '../../hooks/useColors';
-import { Pagina, Encabezado, Tabla, Boton, Modal, Campo, Entrada, Selector, AreaTexto, Aviso, Insignia } from '../../components/ui';
+import { useColors, MARCA } from '../../hooks/useColors';
+import { Pagina, Encabezado, Tabla, Boton, Modal, Campo, Entrada, Selector, AreaTexto, Aviso, Etapas } from '../../components/ui';
 import { useAvisos } from '../../hooks/useDialogos';
-import { InsigniaPedido } from '../../components/insignias';
 import { ESTADOS_PEDIDO } from '../../utils/catalogos';
 import { formatFecha, hoyISO } from '../../utils/fechas';
 import { numero, moneda, mensajeError } from '../../utils/formato';
 import { puede } from '../../utils/permisos';
+
+// Pestañas de la lista: cada una filtra en pantalla y muestra cuántos hay
+const FILTROS = [
+    { clave: '', titulo: 'Todos', cumple: () => true },
+    { clave: 'proximos', titulo: 'Entrega próxima', cumple: p => p.entrega_proxima, alerta: true },
+    { clave: 'retrasados', titulo: 'Retrasados', cumple: p => p.retrasado && p.estado !== 'entregado', alerta: true },
+    ...['pendiente', 'en_preparacion', 'empacado', 'en_transporte', 'entregado', 'anulado'].map(e => ({ clave: e, titulo: ESTADOS_PEDIDO[e].label, cumple: p => p.estado === e }))
+];
+
+// Tinte de la fila según su situación (como la tabla de la referencia)
+const tonoFila = (p) => {
+    if (p.estado === 'anulado') return 'gris';
+    if (p.retrasado && p.estado !== 'entregado') return 'rojo';
+    if (p.entrega_proxima) return 'amarillo';
+    if (p.estado === 'entregado') return 'verde';
+    return 'azul';
+};
+
+// La fecha que importa según la etapa, dicha en palabras
+const situacionEntrega = (p) => {
+    if (p.estado === 'anulado') return { texto: 'Anulado', color: null };
+    if (p.estado === 'entregado') return p.retrasado
+        ? { texto: `Entregado el ${formatFecha(p.fecha_real_entrega)}, ${p.dias_retraso} d tarde`, color: MARCA.rojo }
+        : { texto: `Entregado el ${formatFecha(p.fecha_real_entrega)}, a tiempo`, color: MARCA.verde };
+    if (p.retrasado) return { texto: `${p.dias_retraso} d de retraso`, color: MARCA.rojo };
+    if (p.dias_para_entrega === 0) return { texto: 'Se entrega hoy', color: '#A16A00' };
+    return { texto: `Faltan ${p.dias_para_entrega} d`, color: p.entrega_proxima ? '#A16A00' : null };
+};
 
 const Pedidos = () => {
     const c = useColors();
     const { usuario } = useAuth();
     const navigate = useNavigate();
     const [params, setParams] = useSearchParams();
-    const [filtros, setFiltros] = useState({ estado: '', id_institucion: '', retrasados: '' });
-    const consulta = new URLSearchParams(Object.entries(filtros).filter(([, v]) => v)).toString();
-    const { datos: pedidos, recargar, cargando } = useLista(`/pedidos${consulta ? `?${consulta}` : ''}`);
+    // El filtro vive en la URL para que el panel pueda abrir la lista ya filtrada
+    const filtro = params.get('estado') || (params.get('retrasados') ? 'retrasados' : params.get('proximos') ? 'proximos' : '');
+    const idInstitucion = params.get('id_institucion') || '';
+    const cambiarFiltros = (nuevoFiltro, nuevaInstitucion) => {
+        const p = {};
+        if (['retrasados', 'proximos'].includes(nuevoFiltro)) p[nuevoFiltro] = '1';
+        else if (nuevoFiltro) p.estado = nuevoFiltro;
+        if (nuevaInstitucion) p.id_institucion = nuevaInstitucion;
+        setParams(p, { replace: true });
+    };
+    const { datos: todos, recargar, cargando } = useLista('/pedidos');
     const { datos: instituciones } = useLista('/instituciones');
     const { datos: contratos } = useLista('/contratos?estado=vigente');
+    const [buscar, setBuscar] = useState('');
     // Desde el detalle de un contrato se llega con ?contrato=ID: el formulario abre con ese contrato
     const [form, setForm] = useState(() => params.get('contrato')
         ? { id_contrato: params.get('contrato'), fecha_programada: '', observaciones: '', cantidades: {} }
@@ -53,43 +89,72 @@ const Pedidos = () => {
         } catch (err) { setError(mensajeError(err)); }
     };
 
-    const f = (k) => ({ value: filtros[k], onChange: e => setFiltros({ ...filtros, [k]: e.target.value }) });
+    // Filtro por institución y texto; después las pestañas cuentan sobre ese resultado
+    const texto = buscar.trim().toLowerCase();
+    const base = todos.filter(p =>
+        (!idInstitucion || String(p.Contrato?.Institucion?.id_institucion) === idInstitucion) &&
+        (!texto || `${p.numero_pedido} ${p.Contrato?.Institucion?.nombre} ${p.Contrato?.numero_contrato} ${p.Contrato?.nog}`.toLowerCase().includes(texto)));
+    const activo = FILTROS.find(f => f.clave === filtro) || FILTROS[0];
+    const pedidos = base.filter(activo.cumple);
 
     return (
         <Pagina>
             {aviso}
-            <Encabezado icono={Truck} titulo="Pedidos" color="#B85C4A"
-                subtitulo="Entregas a instituciones bajo un contrato. El sistema elige los lotes (primero el que vence antes) y registra cada etapa del despacho.">
+            <Encabezado titulo="Pedidos">
                 {puede(usuario, 'pedidos.crear') && <Boton icono={Plus} onClick={() => abrir()}>Nuevo pedido</Boton>}
             </Encabezado>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-                <Selector vacio="Todos los estados" {...f('estado')} opciones={Object.entries(ESTADOS_PEDIDO).map(([value, x]) => ({ value, label: x.label }))} />
-                <Selector vacio="Todas las instituciones" {...f('id_institucion')} opciones={instituciones.map(i => ({ value: i.id_institucion, label: i.nombre }))} />
-                <Selector {...f('retrasados')} opciones={[{ value: '', label: 'Todos' }, { value: '1', label: 'Solo retrasados' }]} />
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div className="flex flex-wrap gap-1.5">
+                    {FILTROS.map(f => {
+                        const n = base.filter(f.cumple).length;
+                        if (f.alerta && !n && filtro !== f.clave) return null;
+                        const sel = filtro === f.clave;
+                        return (
+                            <button key={f.clave || 'todos'} onClick={() => cambiarFiltros(f.clave, idInstitucion)}
+                                className="af-boton h-8 px-3.5 rounded-full text-[12.5px] font-medium flex items-center gap-2 transition"
+                                style={sel ? { backgroundColor: c.menuActivo, color: c.menuActivoTexto } : { backgroundColor: c.card, color: f.alerta ? MARCA.rojo : c.textPrimary }}>
+                                {f.titulo}<span className="text-[11px]" style={{ color: sel ? '#6E6E76' : c.textSecondary }}>{n}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+                <div className="flex gap-2">
+                    <div className="w-56"><Entrada placeholder="Buscar pedido, institución…" value={buscar} onChange={e => setBuscar(e.target.value)} /></div>
+                    <div className="w-56"><Selector vacio="Todas las instituciones" value={idInstitucion} onChange={e => cambiarFiltros(filtro, e.target.value)} opciones={instituciones.map(i => ({ value: i.id_institucion, label: i.nombre }))} /></div>
+                </div>
             </div>
 
             <Tabla
                 claveFila="id_pedido"
                 filas={pedidos}
                 cargando={cargando}
+                tonoFila={tonoFila}
                 alHacerClic={p => navigate(`/pedidos/${p.id_pedido}`)}
-                vacio="No hay pedidos."
+                vacio="No hay pedidos con este filtro."
                 columnas={[
-                    { clave: 'numero_pedido', titulo: 'Pedido', render: p => <span className="font-medium whitespace-nowrap" style={{ color: '#2B8EA6' }}>{p.numero_pedido}</span> },
-                    { clave: 'inst', titulo: 'Institución', render: p => p.Contrato?.Institucion?.nombre },
-                    { clave: 'contrato', titulo: 'Contrato / NOG', render: p => `${p.Contrato?.numero_contrato} · ${p.Contrato?.nog}` },
-                    { clave: 'fecha_pedido', titulo: 'Fecha pedido', render: p => formatFecha(p.fecha_pedido) },
-                    { clave: 'fecha_programada', titulo: 'Programada', render: p => formatFecha(p.fecha_programada) },
-                    { clave: 'fecha_real_entrega', titulo: 'Entregado', render: p => formatFecha(p.fecha_real_entrega) },
-                    { clave: 'monto', titulo: 'Monto', alinear: 'right', render: p => moneda(p.monto_total) },
                     {
-                        clave: 'estado', titulo: 'Estado', render: p => (
-                            <div className="flex flex-wrap gap-1"><InsigniaPedido valor={p.estado} />
-                                {p.retrasado && <Insignia tono="rojo">{p.estado === 'entregado' ? `Entregado con ${p.dias_retraso} d de retraso` : `${p.dias_retraso} d de retraso`}</Insignia>}
-                            </div>
+                        clave: 'numero_pedido', titulo: 'Pedido', render: p => (
+                            <div><p className="font-semibold whitespace-nowrap">{p.numero_pedido}</p><p className="text-[11px]" style={{ color: c.textSecondary }}>Pedido el {formatFecha(p.fecha_pedido)}</p></div>
                         )
-                    }
+                    },
+                    {
+                        clave: 'inst', titulo: 'Institución', render: p => (
+                            <div className="max-w-[300px]"><p className="truncate">{p.Contrato?.Institucion?.nombre}</p><p className="text-[11px] truncate" style={{ color: c.textSecondary }}>Contrato {p.Contrato?.numero_contrato} · NOG {p.Contrato?.nog}</p></div>
+                        )
+                    },
+                    {
+                        clave: 'entrega', titulo: 'Entrega programada', render: p => {
+                            const s = situacionEntrega(p);
+                            return <div><p className="whitespace-nowrap">{formatFecha(p.fecha_programada)}</p><p className="text-[11px] font-medium whitespace-nowrap" style={{ color: s.color || c.textSecondary }}>{s.texto}</p></div>;
+                        }
+                    },
+                    {
+                        clave: 'estado', titulo: 'Etapa', render: p => (
+                            <div><p className="text-[12.5px] mb-1.5">{ESTADOS_PEDIDO[p.estado]?.label}</p><Etapas estado={p.estado} retrasado={p.retrasado} /></div>
+                        )
+                    },
+                    { clave: 'monto', titulo: 'Monto', alinear: 'right', render: p => <span className="font-semibold whitespace-nowrap">{moneda(p.monto_total)}</span> }
                 ]}
             />
 

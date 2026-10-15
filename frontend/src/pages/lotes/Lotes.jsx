@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, Pencil, ShieldAlert, GitBranch } from 'lucide-react';
+import { Package, Pencil, ShieldAlert, GitBranch, Ban, RotateCcw } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useLista, useCatalogo } from '../../hooks/useCatalogo';
 import { Pagina, Encabezado, Tabla, Boton, Modal, Campo, Entrada, Selector, AreaTexto, Aviso, Insignia } from '../../components/ui';
-import { useAvisos } from '../../hooks/useDialogos';
+import { useAvisos, useDialogoMotivo } from '../../hooks/useDialogos';
 import { InsigniaSemaforo, InsigniaCondicion } from '../../components/insignias';
 import { CONDICIONES_LOTE } from '../../utils/catalogos';
 import { formatFecha, hoyISO } from '../../utils/fechas';
@@ -19,13 +19,14 @@ const Lotes = () => {
     const { datos: laboratorios } = useCatalogo('laboratorios');
     const { datos: proveedores } = useCatalogo('proveedores');
     const { datos: ubicaciones } = useCatalogo('ubicaciones', { activos: true });
-    const [filtros, setFiltros] = useState({ id_producto: '', id_laboratorio: '', id_proveedor: '', condicion: '', numero_lote: '', con_existencia: '1' });
+    const [filtros, setFiltros] = useState({ buscar: '', id_producto: '', id_laboratorio: '', id_proveedor: '', condicion: '', con_existencia: '1' });
     const [lotes, setLotes] = useState([]);
     const [cargando, setCargando] = useState(true);
     const [edicion, setEdicion] = useState(null);
     const [condicion, setCondicion] = useState(null);
     const [error, setError] = useState('');
     const [aviso, mostrar] = useAvisos();
+    const [dialogo, pedirMotivo] = useDialogoMotivo();
     const esAdmin = puede(usuario, 'lotes.fechas');
 
     const cargar = useCallback(async () => {
@@ -64,21 +65,33 @@ const Lotes = () => {
         } catch (err) { setError(mensajeError(err)); }
     };
 
+    // Caso 9: un lote registrado por error se anula (no se borra) y se puede restaurar
+    const anularORestaurar = async (l, restaurar) => {
+        const motivo = await pedirMotivo(restaurar
+            ? { titulo: `Restaurar lote ${l.numero_lote}`, confirmar: 'Restaurar', mensaje: 'El lote vuelve al inventario con la misma cantidad que tenía al anularse.' }
+            : { titulo: `Anular lote ${l.numero_lote}`, confirmar: 'Anular lote', peligro: true, mensaje: 'Úsalo solo si el lote se registró por error (por ejemplo, duplicado). Deja de contar en la existencia y en FEFO, pero no se borra. No es posible si del lote ya salió producto.' });
+        if (!motivo) return;
+        try {
+            const r = await api.post(`/lotes/${l.id_lote}/${restaurar ? 'restaurar' : 'anular'}`, { motivo });
+            mostrar(r.data.mensaje); cargar();
+        } catch (err) { mostrar(mensajeError(err), 'rojo'); }
+    };
+
     const f = (campo) => ({ value: filtros[campo], onChange: e => setFiltros({ ...filtros, [campo]: e.target.value }) });
 
     return (
         <Pagina>
-            {aviso}
-            <Encabezado icono={Package} titulo="Lotes" color="#2B8EA6"
+            {aviso}{dialogo}
+            <Encabezado icono={Package} titulo="Lotes" color="#3D7EF6"
                 subtitulo="Los lotes se crean desde Ingresos de compra y nunca se eliminan. Aquí se consultan, se corrigen (con motivo) y se cambia su condición." />
 
             <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+                <Entrada className="col-span-2 md:col-span-6" placeholder="Buscar por nombre del producto, código, laboratorio o número de lote…" {...f('buscar')} />
                 <Selector vacio="Todos los productos" {...f('id_producto')} opciones={productos.map(p => ({ value: p.id_producto, label: `${p.nombre} ${p.concentracion || ''}` }))} />
                 <Selector vacio="Todos los laboratorios" {...f('id_laboratorio')} opciones={laboratorios.map(l => ({ value: l.id_laboratorio, label: l.nombre }))} />
                 <Selector vacio="Todos los proveedores" {...f('id_proveedor')} opciones={proveedores.map(p => ({ value: p.id_proveedor, label: p.nombre }))} />
                 <Selector vacio="Cualquier condición" {...f('condicion')} opciones={Object.entries(CONDICIONES_LOTE).map(([value, x]) => ({ value, label: x.label }))} />
-                <Entrada placeholder="No. de lote" {...f('numero_lote')} />
-                <Selector {...f('con_existencia')} opciones={[{ value: '1', label: 'Solo con existencia' }, { value: '', label: 'Todos (historial)' }]} />
+                <Selector className="md:col-span-2" {...f('con_existencia')} opciones={[{ value: '1', label: 'Solo con existencia' }, { value: '', label: 'Todos (historial)' }]} />
             </div>
 
             <Tabla
@@ -87,7 +100,7 @@ const Lotes = () => {
                 cargando={cargando}
                 vacio="No hay lotes con esos filtros."
                 columnas={[
-                    { clave: 'numero_lote', titulo: 'Lote', render: l => <span className="font-medium whitespace-nowrap" style={{ color: '#2B8EA6' }}>{l.numero_lote}</span> },
+                    { clave: 'numero_lote', titulo: 'Lote', render: l => <span className="font-medium whitespace-nowrap" style={{ color: '#3D7EF6' }}>{l.numero_lote}</span> },
                     { clave: 'producto', titulo: 'Producto', render: l => `${l.Producto?.nombre} ${l.Producto?.concentracion || ''}` },
                     { clave: 'lab', titulo: 'Laboratorio', render: l => l.Laboratorio?.nombre },
                     { clave: 'prov', titulo: 'Proveedor', render: l => <div><div>{l.Ingreso?.Proveedor?.nombre}</div><div className="text-xs opacity-70">Fact. {l.Ingreso?.serie_factura}-{l.Ingreso?.numero_factura} · {formatFecha(l.Ingreso?.fecha_recepcion)}</div></div> },
@@ -103,6 +116,10 @@ const Lotes = () => {
                                     <Boton pequeno variante="info" icono={Pencil} onClick={() => abrirEdicion(l)}>Corregir</Boton>
                                     {!['vencido'].includes(l.condicion) && <Boton pequeno variante="peligro" icono={ShieldAlert} onClick={() => { setError(''); setCondicion({ lote: l, nueva: l.condicion === 'disponible' ? 'cuarentena' : 'disponible', motivo: '' }); }}>Condición</Boton>}
                                 </>}
+                                {puede(usuario, 'lotes.anular') && Number(l.cantidad_disponible) === Number(l.cantidad_recibida) && l.condicion !== 'anulado' &&
+                                    <Boton pequeno variante="peligro" icono={Ban} onClick={() => anularORestaurar(l, false)}>Anular</Boton>}
+                                {puede(usuario, 'lotes.anular') && l.condicion === 'anulado' &&
+                                    <Boton pequeno variante="exito" icono={RotateCcw} onClick={() => anularORestaurar(l, true)}>Restaurar</Boton>}
                             </div>
                         )
                     }

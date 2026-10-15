@@ -41,3 +41,14 @@ export const hoyISO = () => {
 };
 
 export const primerDiaMesISO = () => `${hoyISO().slice(0, 8)}01`;
+
+// Tiempo hasta el vencimiento dicho como lo diría una persona
+export const tiempoRestante = (dias) => {
+    if (dias < 0) return `venció hace ${tiempoRestante(-dias).replace('en ', '')}`;
+    if (dias === 0) return 'vence hoy';
+    if (dias < 60) return `en ${dias} día${dias === 1 ? '' : 's'}`;
+    if (dias < 730) return `en ${Math.round(dias / 30.4)} meses`;
+    const anios = Math.floor(dias / 365);
+    const meses = Math.round((dias - anios * 365) / 30.4);
+    return `en ${anios} año${anios === 1 ? '' : 's'}${meses ? ` y ${meses} m` : ''}`;
+};

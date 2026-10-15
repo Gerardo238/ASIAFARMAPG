@@ -9,6 +9,7 @@ const DetalleContrato = require('./DetalleContrato');
 const Pedido = require('./Pedido');
 const DetallePedido = require('./DetallePedido');
 const Auditoria = require('./Auditoria');
+const Adjunto = require('./Adjunto');
 const { AsignacionLote, SeguimientoPedido } = require('./Despacho');
 const {
     Ubicacion, FormaFarmaceutica, UnidadMedida, TipoInstitucion, ModalidadCompra,
@@ -86,10 +87,12 @@ SeguimientoPedido.belongsTo(Usuario, { foreignKey: 'id_usuario' });
 // ---------- Auditoría ----------
 Usuario.hasMany(Auditoria, { foreignKey: 'id_usuario' });
 Auditoria.belongsTo(Usuario, { foreignKey: 'id_usuario' });
+Usuario.hasMany(Adjunto, { foreignKey: 'id_usuario' });
+Adjunto.belongsTo(Usuario, { foreignKey: 'id_usuario' });
 
 module.exports = {
     Usuario, Institucion, Producto, Ingreso, Lote, Movimiento,
     Contrato, DetalleContrato, Pedido, DetallePedido, AsignacionLote, SeguimientoPedido,
-    Auditoria, Ubicacion, FormaFarmaceutica, UnidadMedida, TipoInstitucion, ModalidadCompra,
+    Auditoria, Adjunto, Ubicacion, FormaFarmaceutica, UnidadMedida, TipoInstitucion, ModalidadCompra,
     MotivoMovimiento, Laboratorio, Proveedor, Parametro
 };

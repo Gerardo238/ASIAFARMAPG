@@ -49,7 +49,7 @@ export const SEMAFORO = {
 
 export const ACCIONES_AUDITORIA = {
     crear: 'Creó', editar: 'Modificó', anular: 'Anuló', restaurar: 'Restauró',
-    cambio_estado: 'Cambió estado', ajuste_inventario: 'Ajustó inventario'
+    cambio_estado: 'Cambió estado', ajuste_inventario: 'Ajustó inventario', adjuntar: 'Adjuntó documento'
 };
 
 export const TABLAS_AUDITORIA = {

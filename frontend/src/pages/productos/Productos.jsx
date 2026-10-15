@@ -17,8 +17,31 @@ const Productos = () => {
     const { usuario } = useAuth();
     const navigate = useNavigate();
     const { datos: productos, recargar, cargando } = useLista('/productos');
-    const { datos: formas } = useCatalogo('formas-farmaceuticas', { activos: true });
-    const { datos: unidades } = useCatalogo('unidades-medida', { activos: true });
+    const { datos: formas, recargar: recargarFormas } = useCatalogo('formas-farmaceuticas', { activos: true });
+    const { datos: unidades, recargar: recargarUnidades } = useCatalogo('unidades-medida', { activos: true });
+    // Alta rápida de una forma farmacéutica o unidad sin salir del formulario (solo administrador)
+    const [alta, setAlta] = useState(null);
+    const guardarAlta = async () => {
+        if (!alta?.nombre.trim()) return;
+        try {
+            const r = await api.post(`/catalogos/${alta.catalogo}`, { nombre: alta.nombre.trim() });
+            const nuevo = r.data.registro;
+            if (alta.catalogo === 'formas-farmaceuticas') { await recargarFormas(); setForm(f => ({ ...f, id_forma_farmaceutica: String(nuevo.id_forma_farmaceutica) })); }
+            else { await recargarUnidades(); setForm(f => ({ ...f, id_unidad_medida: String(nuevo.id_unidad_medida) })); }
+            setAlta(null);
+        } catch (err) { setError(mensajeError(err)); }
+    };
+    const enlaceAlta = (catalogo) => puede(usuario, 'catalogos.escribir') && (
+        <button type="button" className="text-[11.5px] font-medium ml-2" style={{ color: '#3D7EF6' }} onClick={() => setAlta({ catalogo, nombre: '' })}>+ Nueva</button>
+    );
+    const campoAlta = (catalogo) => alta?.catalogo === catalogo && (
+        <div className="flex gap-2 mt-2">
+            <Entrada autoFocus placeholder={catalogo === 'formas-farmaceuticas' ? 'Ej. Solución oftálmica' : 'Ej. Ampolla'} value={alta.nombre}
+                onChange={e => setAlta({ ...alta, nombre: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); guardarAlta(); } }} />
+            <Boton pequeno onClick={guardarAlta}>Agregar</Boton>
+            <Boton pequeno variante="secundario" onClick={() => setAlta(null)}>Cancelar</Boton>
+        </div>
+    );
     const [form, setForm] = useState(null);
     const [editando, setEditando] = useState(null);
     const [error, setError] = useState('');
@@ -85,7 +108,7 @@ const Productos = () => {
                 alHacerClic={p => navigate(`/productos/${p.id_producto}`)}
                 vacio="No hay productos registrados."
                 columnas={[
-                    { clave: 'codigo', titulo: 'Código', render: p => <span className="font-medium whitespace-nowrap" style={{ color: '#2B8EA6' }}>{p.codigo}</span> },
+                    { clave: 'codigo', titulo: 'Código', render: p => <span className="font-medium whitespace-nowrap" style={{ color: '#3D7EF6' }}>{p.codigo}</span> },
                     { clave: 'nombre', titulo: 'Producto', render: p => <span className="font-medium">{p.nombre} {p.concentracion}</span> },
                     { clave: 'forma', titulo: 'Forma / unidad', render: p => `${p.FormaFarmaceutica?.nombre || ''} · ${p.UnidadMedida?.nombre || ''}` },
                     {
@@ -121,13 +144,15 @@ const Productos = () => {
                         <Campo etiqueta="Código" obligatorio><Entrada value={form.codigo} required onChange={e => setForm({ ...form, codigo: e.target.value })} /></Campo>
                         <Campo etiqueta="Nombre genérico" obligatorio><Entrada value={form.nombre} required onChange={e => setForm({ ...form, nombre: e.target.value })} /></Campo>
                         <Campo etiqueta="Concentración"><Entrada value={form.concentracion} placeholder="Ej. 2%, 500 mg" onChange={e => setForm({ ...form, concentracion: e.target.value })} /></Campo>
-                        <Campo etiqueta="Forma farmacéutica" obligatorio>
+                        <Campo etiqueta={<>Forma farmacéutica{enlaceAlta('formas-farmaceuticas')}</>} obligatorio>
                             <Selector vacio="Seleccionar" required value={form.id_forma_farmaceutica} onChange={e => setForm({ ...form, id_forma_farmaceutica: e.target.value })}
                                 opciones={formas.map(f => ({ value: f.id_forma_farmaceutica, label: f.nombre }))} />
+                            {campoAlta('formas-farmaceuticas')}
                         </Campo>
-                        <Campo etiqueta="Unidad de medida" obligatorio>
+                        <Campo etiqueta={<>Unidad de medida{enlaceAlta('unidades-medida')}</>} obligatorio>
                             <Selector vacio="Seleccionar" required value={form.id_unidad_medida} onChange={e => setForm({ ...form, id_unidad_medida: e.target.value })}
                                 opciones={unidades.map(u => ({ value: u.id_unidad_medida, label: u.nombre }))} />
+                            {campoAlta('unidades-medida')}
                         </Campo>
                         <Campo etiqueta="Stock mínimo"><Entrada type="number" min="0" value={form.stock_minimo} onChange={e => setForm({ ...form, stock_minimo: e.target.value })} /></Campo>
                         <Campo etiqueta="Descripción" className="md:col-span-2"><AreaTexto value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })} /></Campo>

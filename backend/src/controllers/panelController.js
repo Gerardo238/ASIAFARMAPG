@@ -1,22 +1,38 @@
-// Panel de control: indicadores, alertas y actividad reciente
+// Panel de control: lo que cada persona tiene que atender hoy, indicadores,
+// alertas (vencimientos, entregas, contratos) y actividad reciente.
 const { Op } = require('sequelize');
-const { Producto, Lote, Contrato, Pedido, Ingreso, Institucion, Laboratorio } = require('../models/index');
+const { Producto, Lote, Contrato, Pedido, Ingreso, Institucion, Laboratorio, Auditoria, Usuario } = require('../models/index');
 const { manejarError } = require('../utils/errores');
 const { obtenerParametros } = require('../services/parametros');
-const { semaforo } = require('../services/inventario');
+const { semaforo, redondear } = require('../services/inventario');
+const { calcularRetraso, esEntregaProxima, lotesSinDestino, indicadoresCumplimiento } = require('../services/analisis');
 const { resumirLotes } = require('./productoController');
 const { cargarConAvance } = require('./contratoController');
-const { calcularRetraso, ETIQUETAS } = require('./pedidoController');
-const { hoy } = require('../utils/fechas');
+const { ETIQUETAS } = require('./pedidoController');
+const { hoy, diasEntre, sumarMeses, sumarDias } = require('../utils/fechas');
 
 const NOMBRES_MES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+const TABLAS = { productos: 'producto', lotes: 'lote', ingresos: 'ingreso', contratos: 'contrato', pedidos: 'pedido', instituciones: 'institución', usuarios: 'usuario', parametros: 'parámetro' };
+
+// Texto corto para la bitácora reciente del panel ("Ana López entregó PED-2026-00010")
+const describirCambio = (a) => {
+    const d = a.datos_despues || a.datos_antes || {};
+    const nombre = d.numero_pedido || d.numero_contrato || d.numero_lote || (d.numero_factura ? `factura ${d.serie_factura}-${d.numero_factura}` : null) || d.nombre || `#${a.id_registro}`;
+    return { que: TABLAS[a.tabla] || a.tabla, nombre, estado: a.accion === 'cambio_estado' ? (d.estado || d.condicion) : null };
+};
+
+const resumenPedido = (p) => ({
+    id_pedido: p.id_pedido, numero_pedido: p.numero_pedido, institucion: p.Contrato?.Institucion?.nombre,
+    numero_contrato: p.Contrato?.numero_contrato, fecha_programada: p.fecha_programada, estado: p.estado,
+    estado_texto: ETIQUETAS[p.estado], dias_retraso: calcularRetraso(p), dias_para_entrega: diasEntre(hoy(), p.fecha_programada)
+});
 
 const getPanel = async (req, res) => {
     try {
         const par = await obtenerParametros();
         const fechaHoy = hoy();
 
-        const [productos, lotes, contratos, pedidos, ingresos] = await Promise.all([
+        const [productos, lotes, contratos, pedidos, ingresos, sinDestino, cumplimiento] = await Promise.all([
             Producto.findAll({ where: { activo: true }, include: [{ model: Lote, attributes: ['cantidad_disponible', 'condicion', 'fecha_vencimiento'] }] }),
             Lote.findAll({
                 where: { cantidad_disponible: { [Op.gt]: 0 }, condicion: { [Op.in]: ['disponible', 'cuarentena', 'bloqueado', 'vencido'] } },
@@ -28,7 +44,9 @@ const getPanel = async (req, res) => {
                 include: [{ model: Contrato, attributes: ['numero_contrato'], include: [{ model: Institucion, attributes: ['nombre'] }] }],
                 order: [['createdAt', 'DESC']]
             }),
-            Ingreso.findAll({ where: { estado: 'registrado' }, attributes: ['fecha_recepcion'] })
+            Ingreso.findAll({ where: { estado: 'registrado' }, attributes: ['fecha_recepcion'] }),
+            lotesSinDestino(par),
+            indicadoresCumplimiento()
         ]);
 
         const bajoMinimo = productos
@@ -50,6 +68,11 @@ const getPanel = async (req, res) => {
 
         const pedidosActivos = pedidos.filter(p => !['entregado', 'anulado'].includes(p.estado));
         const retrasados = pedidosActivos.filter(p => calcularRetraso(p) > 0);
+        // Alerta preventiva: todavía en bodega y la fecha programada llega en pocos días
+        const entregasProximas = pedidosActivos
+            .filter(p => esEntregaProxima(p, par.DIAS_ALERTA_PEDIDO))
+            .sort((a, b) => a.fecha_programada.localeCompare(b.fecha_programada));
+        const enEstado = (estado) => pedidosActivos.filter(p => p.estado === estado).length;
 
         // Actividad de los últimos 9 meses
         const [anio, mes] = fechaHoy.split('-').map(Number);
@@ -62,23 +85,108 @@ const getPanel = async (req, res) => {
         ingresos.forEach(i => sumar(i.fecha_recepcion, 'ingresos'));
         pedidos.filter(p => p.estado !== 'anulado').forEach(p => { sumar(p.fecha_pedido, 'pedidos'); sumar(p.fecha_real_entrega, 'entregas'); });
 
+        // ----- Gráficas -----
+        // Entregas por mes: a tiempo / con retraso y monto entregado
+        pedidos.filter(p => p.estado === 'entregado').forEach(p => {
+            const m = meses.find(x => x.clave === p.fecha_real_entrega?.slice(0, 7));
+            if (!m) return;
+            calcularRetraso(p) > 0 ? (m.con_retraso = (m.con_retraso || 0) + 1) : (m.a_tiempo = (m.a_tiempo || 0) + 1);
+            m.monto_entregado = redondear((m.monto_entregado || 0) + Number(p.monto_total));
+        });
+        meses.forEach(m => { m.a_tiempo = m.a_tiempo || 0; m.con_retraso = m.con_retraso || 0; m.monto_entregado = m.monto_entregado || 0; });
+
+        // Valor del inventario (a costo) según si se puede despachar
+        const fechaMinDespacho = sumarMeses(fechaHoy, par.VIGENCIA_MINIMA_DESPACHO_MESES);
+        const valor = { apto: 0, vida_corta: 0, retenido: 0, vencido: 0 };
+        lotes.forEach(l => {
+            const v = Number(l.cantidad_disponible) * Number(l.costo_unitario);
+            if (l.condicion === 'vencido') valor.vencido += v;
+            else if (l.condicion !== 'disponible') valor.retenido += v;
+            else if (l.fecha_vencimiento >= fechaMinDespacho) valor.apto += v;
+            else valor.vida_corta += v;
+        });
+        Object.keys(valor).forEach(k => { valor[k] = redondear(valor[k]); });
+
+        // Vencimientos de los próximos 12 meses (unidades y valor), con el color del semáforo
+        const vencimientos = [];
+        for (let i = 0; i < 12; i++) {
+            const f = new Date(Date.UTC(anio, mes - 1 + i, 1));
+            const clave = f.toISOString().slice(0, 7);
+            const finMes = sumarDias(new Date(Date.UTC(anio, mes + i, 1)).toISOString().slice(0, 10), -1);
+            const dias = diasEntre(fechaHoy, finMes);
+            vencimientos.push({
+                clave, mes: `${NOMBRES_MES[f.getUTCMonth()]} ${String(f.getUTCFullYear()).slice(2)}`, unidades: 0, valor: 0, lotes: 0,
+                color: dias <= par.DIAS_SEMAFORO_ROJO ? 'rojo' : dias <= par.DIAS_SEMAFORO_AMARILLO ? 'amarillo' : 'verde'
+            });
+        }
+        lotes.filter(l => l.condicion !== 'vencido').forEach(l => {
+            const b = vencimientos.find(x => x.clave === l.fecha_vencimiento.slice(0, 7));
+            if (!b) return;
+            b.lotes += 1; b.unidades += Number(l.cantidad_disponible);
+            b.valor = redondear(b.valor + Number(l.cantidad_disponible) * Number(l.costo_unitario));
+        });
+
+        // Avance de cada contrato vigente contra el tiempo que ya pasó de su plazo
+        const avanceContratos = contratos.map(c => {
+            const plazo = Math.max(1, diasEntre(c.fecha_inicio, c.fecha_fin));
+            const transcurrido = Math.min(100, Math.max(0, Math.round((diasEntre(c.fecha_inicio, fechaHoy) / plazo) * 100)));
+            return {
+                id_contrato: c.id_contrato, numero_contrato: c.numero_contrato, institucion: c.Institucion?.nombre,
+                avance: c.porcentaje_avance, tiempo: transcurrido, dias_para_fin: c.dias_para_fin, atrasado: c.porcentaje_avance + 10 < transcurrido
+            };
+        }).sort((a, b) => (b.tiempo - b.avance) - (a.tiempo - a.avance));
+
+        // Puntualidad por institución en los últimos 12 meses
+        const desde12 = sumarDias(fechaHoy, -365);
+        const porInstitucion = {};
+        pedidos.filter(p => p.estado === 'entregado' && p.fecha_real_entrega >= desde12).forEach(p => {
+            const n = p.Contrato?.Institucion?.nombre || '—';
+            const g = porInstitucion[n] || (porInstitucion[n] = { institucion: n, a_tiempo: 0, con_retraso: 0 });
+            calcularRetraso(p) > 0 ? g.con_retraso++ : g.a_tiempo++;
+        });
+        const cumplimientoInstituciones = Object.values(porInstitucion)
+            .map(g => ({ ...g, entregados: g.a_tiempo + g.con_retraso, porcentaje: Math.round((g.a_tiempo / (g.a_tiempo + g.con_retraso)) * 100) }))
+            .sort((a, b) => a.porcentaje - b.porcentaje);
+
+        // Bitácora reciente (solo quien puede ver la auditoría)
+        const bitacora = ['administrador', 'gerente'].includes(req.usuario.rol)
+            ? (await Auditoria.findAll({ include: [{ model: Usuario, attributes: ['nombre', 'apellido'] }], order: [['fecha', 'DESC'], ['id_auditoria', 'DESC']], limit: 8 }))
+                .map(a => ({ id: a.id_auditoria, fecha: a.fecha, accion: a.accion, tabla: a.tabla, motivo: a.motivo, usuario: a.Usuario ? `${a.Usuario.nombre} ${a.Usuario.apellido}` : 'Sistema', ...describirCambio(a) }))
+            : null;
+
         res.json({
+            graficas: { valor_inventario: valor, vencimientos, avance_contratos: avanceContratos, cumplimiento_instituciones: cumplimientoInstituciones },
+            bitacora,
+            parametros: { dias_alerta_pedido: par.DIAS_ALERTA_PEDIDO, dias_alerta_contrato: par.DIAS_ALERTA_CONTRATO },
             indicadores: {
                 productos: productos.length,
                 productos_bajo_minimo: bajoMinimo.length,
                 lotes_con_existencia: lotes.filter(l => l.condicion === 'disponible').length,
                 lotes_en_alerta: alertasLotes.length,
+                lotes_sin_destino: sinDestino.length,
                 contratos_vigentes: contratos.length,
                 contratos_por_vencer: contratosPorVencer.length,
                 pedidos_en_curso: pedidosActivos.length,
-                pedidos_retrasados: retrasados.length
+                pedidos_retrasados: retrasados.length,
+                entregas_proximas: entregasProximas.length
             },
-            alertas: { lotes: alertasLotes.slice(0, 50), bajo_minimo: bajoMinimo, contratos: contratosPorVencer },
-            pedidos_recientes: pedidos.slice(0, 6).map(p => ({
-                id_pedido: p.id_pedido, numero_pedido: p.numero_pedido, institucion: p.Contrato?.Institucion?.nombre,
-                numero_contrato: p.Contrato?.numero_contrato, fecha_programada: p.fecha_programada, estado: p.estado,
-                estado_texto: ETIQUETAS[p.estado], dias_retraso: calcularRetraso(p)
-            })),
+            // Pendientes por etapa del despacho: el panel muestra a cada rol los suyos
+            tareas: {
+                por_preparar: enEstado('pendiente'),
+                por_empacar: enEstado('en_preparacion'),
+                por_enviar: enEstado('empacado'),
+                por_confirmar_entrega: enEstado('en_transporte')
+            },
+            cumplimiento,
+            alertas: {
+                lotes: alertasLotes.slice(0, 50),
+                bajo_minimo: bajoMinimo,
+                contratos: contratosPorVencer,
+                entregas_proximas: entregasProximas.map(resumenPedido),
+                retrasados: retrasados.map(resumenPedido),
+                sin_destino: sinDestino.slice(0, 20)
+            },
+            pedidos_recientes: pedidos.slice(0, 6).map(resumenPedido),
             actividad: meses
         });
     } catch (error) { manejarError(res, error, 'Error al cargar el panel de control'); }

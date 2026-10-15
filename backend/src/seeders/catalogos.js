@@ -32,6 +32,8 @@ const MOTIVOS = [
     { codigo: 'ANULACION_PEDIDO', nombre: 'Reingreso por anulación de pedido', tipo: 'entrada', sistema: true },
     { codigo: 'ANULACION_INGRESO', nombre: 'Salida por anulación de ingreso', tipo: 'salida', sistema: true },
     { codigo: 'RESTAURACION_INGRESO', nombre: 'Reingreso por restauración de ingreso', tipo: 'entrada', sistema: true },
+    { codigo: 'ANULACION_LOTE', nombre: 'Salida por anulación de lote', tipo: 'salida', sistema: true },
+    { codigo: 'RESTAURACION_LOTE', nombre: 'Reingreso por restauración de lote', tipo: 'entrada', sistema: true },
     { codigo: 'AJUSTE_POSITIVO', nombre: 'Ajuste por inventario físico (sobrante)', tipo: 'entrada', sistema: false },
     { codigo: 'DEVOLUCION_CLIENTE', nombre: 'Devolución de institución', tipo: 'entrada', sistema: false },
     { codigo: 'AJUSTE_NEGATIVO', nombre: 'Ajuste por inventario físico (faltante)', tipo: 'salida', sistema: false },
@@ -45,7 +47,8 @@ const PARAMETROS = [
     { clave: 'VIGENCIA_MINIMA_DESPACHO_MESES', valor: '12', descripcion: 'Meses de vida útil mínima al despachar, si el contrato no indica otra.' },
     { clave: 'DIAS_SEMAFORO_ROJO', valor: '90', descripcion: 'Días antes del vencimiento en que un lote pasa a estado crítico (rojo).' },
     { clave: 'DIAS_SEMAFORO_AMARILLO', valor: '180', descripcion: 'Días antes del vencimiento en que un lote pasa a alerta (amarillo).' },
-    { clave: 'DIAS_ALERTA_CONTRATO', valor: '30', descripcion: 'Días antes de su fin en que un contrato con saldo pendiente aparece en alertas.' }
+    { clave: 'DIAS_ALERTA_CONTRATO', valor: '30', descripcion: 'Días antes de su fin en que un contrato con saldo pendiente aparece en alertas.' },
+    { clave: 'DIAS_ALERTA_PEDIDO', valor: '5', descripcion: 'Días antes de la fecha programada en que un pedido que no ha salido de bodega aparece en alertas.' }
 ];
 
 const sembrarNombres = async (modelo, nombres) => {

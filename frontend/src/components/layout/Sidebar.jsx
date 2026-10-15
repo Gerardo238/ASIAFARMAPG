@@ -1,134 +1,78 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { useTheme } from '../../context/ThemeContext';
 import {
-    LayoutDashboard, Pill, Package, Building2, FileText, Truck, LogOut, User, Moon, Sun,
-    FileBarChart, Users, ArrowUpDown, GitBranch, PackagePlus, ShieldCheck, ListChecks
+    LayoutGrid, Pill, Package, Building2, FileText, Truck, LogOut,
+    FileBarChart, Users, ArrowUpDown, GitBranch, PackagePlus, ShieldCheck, Settings
 } from 'lucide-react';
-import { ROLES } from '../../utils/catalogos';
+import { useColors } from '../../hooks/useColors';
 
 const TODOS = ['administrador', 'gerente', 'bodeguero', 'encargado_contratos'];
 
-const SECCIONES = [
-    {
-        titulo: null,
-        items: [{ path: '/panel', label: 'Panel de control', icon: LayoutDashboard, roles: TODOS }]
-    },
-    {
-        titulo: 'Inventario',
-        items: [
-            { path: '/productos', label: 'Productos', icon: Pill, roles: TODOS },
-            { path: '/ingresos', label: 'Ingresos de compra', icon: PackagePlus, roles: ['administrador', 'bodeguero', 'gerente'] },
-            { path: '/lotes', label: 'Lotes', icon: Package, roles: ['administrador', 'bodeguero', 'gerente'] },
-            { path: '/movimientos', label: 'Kárdex', icon: ArrowUpDown, roles: ['administrador', 'bodeguero', 'gerente'] },
-            { path: '/trazabilidad', label: 'Trazabilidad', icon: GitBranch, roles: TODOS }
-        ]
-    },
-    {
-        titulo: 'Ventas',
-        items: [
-            { path: '/instituciones', label: 'Instituciones', icon: Building2, roles: ['administrador', 'encargado_contratos', 'gerente'] },
-            { path: '/contratos', label: 'Contratos', icon: FileText, roles: ['administrador', 'encargado_contratos', 'gerente'] },
-            { path: '/pedidos', label: 'Pedidos', icon: Truck, roles: TODOS }
-        ]
-    },
-    {
-        titulo: 'Control',
-        items: [
-            { path: '/informes', label: 'Informes', icon: FileBarChart, roles: TODOS },
-            { path: '/auditoria', label: 'Auditoría', icon: ShieldCheck, roles: ['administrador', 'gerente'] },
-            { path: '/catalogos', label: 'Catálogos', icon: ListChecks, roles: ['administrador', 'bodeguero'] },
-            { path: '/usuarios', label: 'Usuarios', icon: Users, roles: ['administrador'] }
-        ]
-    }
+// Grupos separados por una línea, como en la referencia
+const GRUPOS = [
+    [
+        { path: '/panel', label: 'Panel de control', icon: LayoutGrid, roles: TODOS },
+        { path: '/productos', label: 'Productos', icon: Pill, roles: TODOS },
+        { path: '/ingresos', label: 'Ingresos de compra', icon: PackagePlus, roles: ['administrador', 'bodeguero', 'gerente'] },
+        { path: '/lotes', label: 'Lotes', icon: Package, roles: ['administrador', 'bodeguero', 'gerente'] },
+        { path: '/movimientos', label: 'Kárdex', icon: ArrowUpDown, roles: ['administrador', 'bodeguero', 'gerente'] },
+        { path: '/trazabilidad', label: 'Trazabilidad', icon: GitBranch, roles: TODOS }
+    ],
+    [
+        { path: '/instituciones', label: 'Instituciones', icon: Building2, roles: ['administrador', 'encargado_contratos', 'gerente'] },
+        { path: '/contratos', label: 'Contratos', icon: FileText, roles: ['administrador', 'encargado_contratos', 'gerente'] },
+        { path: '/pedidos', label: 'Pedidos', icon: Truck, roles: TODOS }
+    ],
+    [
+        { path: '/informes', label: 'Informes', icon: FileBarChart, roles: TODOS },
+        { path: '/auditoria', label: 'Auditoría', icon: ShieldCheck, roles: ['administrador', 'gerente'] }
+    ],
+    [
+        { path: '/catalogos', label: 'Administración', icon: Settings, roles: ['administrador', 'bodeguero'] },
+        { path: '/usuarios', label: 'Usuarios', icon: Users, roles: ['administrador'] }
+    ]
 ];
 
 const Sidebar = () => {
     const { usuario, logout } = useAuth();
-    const { darkMode, toggleDarkMode } = useTheme();
+    const c = useColors();
+    const item = 'flex items-center gap-3 px-4 h-9 rounded-lg text-[13px] transition-colors';
 
     return (
-        <div className="text-white w-64 min-h-screen flex flex-col shrink-0" style={{ backgroundColor: '#1F2D6E' }}>
-
-            {/* LOGO */}
-            <div className="p-4 flex flex-col items-center" style={{ borderBottom: '1px solid #2B3F8E' }}>
-                <img
-                    src="/logo-blanco.png"
-                    alt="Logo ASIAFARMA"
-                    className="w-28 h-28 object-contain"
-                />
+        <aside className="w-[230px] h-screen sticky top-0 flex flex-col shrink-0" style={{ backgroundColor: c.menu }}>
+            <div className="px-6 pt-7 pb-8 flex items-center gap-2.5">
+                <img src="/logo.png" alt="" className="w-8 h-8 object-contain" />
+                <span className="text-[19px] font-medium" style={{ color: c.textPrimary }}>Asiafarma</span>
             </div>
 
-            {/* USUARIO */}
-            <div className="p-4 flex items-center gap-3" style={{ borderBottom: '1px solid #2B3F8E' }}>
-                <div className="rounded-full p-2" style={{ backgroundColor: '#2B8EA6' }}>
-                    <User size={18} className="text-white" />
-                </div>
-                <div>
-                    <p className="text-white font-medium text-sm">{usuario?.nombre} {usuario?.apellido}</p>
-                    <p className="text-xs" style={{ color: '#90CAD6' }}>{ROLES[usuario?.rol] || usuario?.rol}</p>
-                </div>
-            </div>
-
-            {/* NAVEGACIÓN */}
-            <nav className="flex-1 p-3 overflow-y-auto">
-                {SECCIONES.map((seccion, i) => {
-                    const items = seccion.items.filter(item => item.roles.includes(usuario?.rol));
-                    if (items.length === 0) return null;
+            <nav className="flex-1 overflow-y-auto">
+                {GRUPOS.map((grupo, i) => {
+                    const visibles = grupo.filter(x => x.roles.includes(usuario?.rol));
+                    if (!visibles.length) return null;
                     return (
-                        <div key={i} className="mb-2">
-                            {seccion.titulo && (
-                                <p className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider" style={{ color: '#90CAD6' }}>
-                                    {seccion.titulo}
-                                </p>
-                            )}
-                            {items.map(item => {
-                                const Icon = item.icon;
+                        <div key={i} className="px-4 py-3" style={{ borderTop: i ? `1px solid ${c.cardBorder}` : 'none' }}>
+                            {visibles.map(x => {
+                                const Icon = x.icon;
                                 return (
-                                    <NavLink
-                                        key={item.path}
-                                        to={item.path}
-                                        className={({ isActive }) =>
-                                            `flex items-center gap-3 px-4 py-2.5 rounded-lg transition duration-200 text-sm ${isActive ? 'text-white font-medium' : 'text-blue-200 hover:text-white'}`
-                                        }
-                                        style={({ isActive }) => ({ backgroundColor: isActive ? '#2B8EA6' : 'transparent' })}
-                                    >
-                                        <Icon size={18} />
-                                        <span>{item.label}</span>
+                                    <NavLink key={x.path} to={x.path} className={`${item} mb-1`}
+                                        style={({ isActive }) => isActive
+                                            ? { backgroundColor: c.menuActivo, color: c.menuActivoTexto, fontWeight: 500 }
+                                            : { color: c.textPrimary }}>
+                                        <Icon size={16} strokeWidth={1.6} />
+                                        <span>{x.label}</span>
                                     </NavLink>
                                 );
                             })}
                         </div>
                     );
                 })}
+                <div className="px-4 py-3" style={{ borderTop: `1px solid ${c.cardBorder}` }}>
+                    <button onClick={logout} className={`${item} w-full af-boton hover:opacity-70`} style={{ color: c.textPrimary }}>
+                        <LogOut size={16} strokeWidth={1.6} />Cerrar sesión
+                    </button>
+                </div>
             </nav>
-
-            {/* MODO OSCURO + CERRAR SESIÓN */}
-            <div className="p-4 space-y-1" style={{ borderTop: '1px solid #2B3F8E' }}>
-                <button
-                    onClick={toggleDarkMode}
-                    className="flex items-center gap-3 w-full px-4 py-3 rounded-lg transition duration-200"
-                    style={{ color: '#90CAD6' }}
-                    onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#2B3F8E'; e.currentTarget.style.color = 'white'; }}
-                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#90CAD6'; }}
-                >
-                    {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-                    <span>{darkMode ? 'Modo Claro' : 'Modo Oscuro'}</span>
-                </button>
-
-                <button
-                    onClick={logout}
-                    className="flex items-center gap-3 w-full px-4 py-3 rounded-lg transition duration-200"
-                    style={{ color: '#90CAD6' }}
-                    onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#C4467A'; e.currentTarget.style.color = 'white'; }}
-                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#90CAD6'; }}
-                >
-                    <LogOut size={18} />
-                    <span>Cerrar sesión</span>
-                </button>
-            </div>
-
-        </div>
+        </aside>
     );
 };
 

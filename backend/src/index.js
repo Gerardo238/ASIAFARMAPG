@@ -17,11 +17,13 @@ const contratoRoutes = require('./routes/contratoRoutes');
 const pedidoRoutes = require('./routes/pedidoRoutes');
 const catalogoRoutes = require('./routes/catalogoRoutes');
 const consultaRoutes = require('./routes/consultaRoutes');
+const adjuntoRoutes = require('./routes/adjuntoRoutes');
 
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+// 15 MB: los adjuntos (foto o PDF de la factura) viajan en base64 dentro del JSON
+app.use(express.json({ limit: '15mb' }));
 
 app.get('/', (req, res) => {
     res.json({ mensaje: 'API ASIAFARMA funcionando correctamente' });
@@ -36,6 +38,7 @@ app.use('/api/instituciones', institucionRoutes);
 app.use('/api/contratos', contratoRoutes);
 app.use('/api/pedidos', pedidoRoutes);
 app.use('/api/catalogos', catalogoRoutes);
+app.use('/api/adjuntos', adjuntoRoutes);
 app.use('/api', consultaRoutes);
 
 // sync() crea las tablas que falten sin tocar las existentes.

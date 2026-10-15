@@ -6,6 +6,7 @@ import { Pagina, Encabezado, Tarjeta, Tabla, Boton, DatoFicha, Insignia, Pestana
 import { InsigniaSemaforo, InsigniaCondicion } from '../../components/insignias';
 import { formatFecha, formatFechaHora } from '../../utils/fechas';
 import { numero, moneda } from '../../utils/formato';
+import Adjuntos from '../../components/Adjuntos';
 
 const ProductoDetalle = () => {
     const { id } = useParams();
@@ -48,7 +49,7 @@ const ProductoDetalle = () => {
                     alHacerClic={l => navigate(`/trazabilidad/lote/${l.id_lote}`)}
                     vacio="Este producto no tiene lotes con existencia."
                     columnas={[
-                        { clave: 'numero_lote', titulo: 'Lote', render: l => <span className="font-medium whitespace-nowrap" style={{ color: '#2B8EA6' }}>{l.numero_lote}</span> },
+                        { clave: 'numero_lote', titulo: 'Lote', render: l => <span className="font-medium whitespace-nowrap" style={{ color: '#3D7EF6' }}>{l.numero_lote}</span> },
                         { clave: 'lab', titulo: 'Laboratorio', render: l => l.Laboratorio?.nombre },
                         { clave: 'prov', titulo: 'Proveedor / factura', render: l => <div><div>{l.Ingreso?.Proveedor?.nombre}</div><div className="text-xs opacity-70">Fact. {l.Ingreso?.serie_factura}-{l.Ingreso?.numero_factura}</div></div> },
                         { clave: 'fecha_recepcion', titulo: 'Ingreso', render: l => formatFecha(l.Ingreso?.fecha_recepcion) },
@@ -70,16 +71,19 @@ const ProductoDetalle = () => {
                     vacio="Sin movimientos."
                     columnas={[
                         { clave: 'fecha', titulo: 'Fecha', render: m => formatFechaHora(m.fecha_movimiento) },
-                        { clave: 'lote', titulo: 'Lote', render: m => <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${m.id_lote}`} style={{ color: '#2B8EA6' }}>{m.Lote?.numero_lote}</Link> },
+                        { clave: 'lote', titulo: 'Lote', render: m => <Link className="whitespace-nowrap" to={`/trazabilidad/lote/${m.id_lote}`} style={{ color: '#3D7EF6' }}>{m.Lote?.numero_lote}</Link> },
                         { clave: 'motivo', titulo: 'Motivo', render: m => m.MotivoMovimiento?.nombre },
                         { clave: 'entrada', titulo: 'Entrada', alinear: 'right', render: m => m.tipo_movimiento === 'entrada' ? <span style={{ color: '#065F46' }}>+{numero(m.cantidad)}</span> : '' },
                         { clave: 'salida', titulo: 'Salida', alinear: 'right', render: m => m.tipo_movimiento === 'salida' ? <span style={{ color: '#991B1B' }}>-{numero(m.cantidad)}</span> : '' },
                         { clave: 'saldo', titulo: 'Saldo lote', alinear: 'right', render: m => numero(m.saldo) },
-                        { clave: 'ref', titulo: 'Referencia', render: m => m.Pedido ? <Link to={`/pedidos/${m.Pedido.id_pedido || m.id_pedido}`} style={{ color: '#2B8EA6' }}>{m.Pedido.numero_pedido}</Link> : (m.observacion || '') },
+                        { clave: 'ref', titulo: 'Referencia', render: m => m.Pedido ? <Link to={`/pedidos/${m.Pedido.id_pedido || m.id_pedido}`} style={{ color: '#3D7EF6' }}>{m.Pedido.numero_pedido}</Link> : (m.observacion || '') },
                         { clave: 'usuario', titulo: 'Usuario', render: m => m.Usuario ? `${m.Usuario.nombre} ${m.Usuario.apellido}` : <Insignia>Sistema</Insignia> }
                     ]}
                 />
             </Tarjeta>
+
+            <Adjuntos entidad="productos" id={producto.id_producto} titulo="Documentos del producto" tipoInicial="Registro sanitario"
+                nota="Registro sanitario, ficha técnica u otros documentos del medicamento" />
         </Pagina>
     );
 };

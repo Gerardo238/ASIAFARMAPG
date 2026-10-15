@@ -23,7 +23,7 @@ const Contratos = () => {
     return (
         <Pagina>
             {aviso}
-            <Encabezado icono={FileText} titulo="Contratos" color="#C4467A" subtitulo="Contratos adjudicados en GUATECOMPRAS, con el avance de entrega de cada renglón.">
+            <Encabezado icono={FileText} titulo="Contratos" color="#A35CF1" subtitulo="Contratos adjudicados en GUATECOMPRAS, con el avance de entrega de cada renglón.">
                 <div className="w-48"><Selector vacio="Todos los estados" value={estado} onChange={e => setEstado(e.target.value)} opciones={Object.entries(ESTADOS_CONTRATO).map(([value, x]) => ({ value, label: x.label }))} /></div>
                 {puede(usuario, 'contratos.escribir') && <Boton icono={Plus} onClick={() => setNuevo(true)}>Nuevo contrato</Boton>}
             </Encabezado>
@@ -35,7 +35,7 @@ const Contratos = () => {
                 alHacerClic={c => navigate(`/contratos/${c.id_contrato}`)}
                 vacio="No hay contratos."
                 columnas={[
-                    { clave: 'numero_contrato', titulo: 'Contrato', render: c => <span className="font-medium whitespace-nowrap" style={{ color: '#2B8EA6' }}>{c.numero_contrato}</span> },
+                    { clave: 'numero_contrato', titulo: 'Contrato', render: c => <span className="font-medium whitespace-nowrap" style={{ color: '#3D7EF6' }}>{c.numero_contrato}</span> },
                     { clave: 'nog', titulo: 'NOG' },
                     { clave: 'inst', titulo: 'Institución', render: c => c.Institucion?.nombre },
                     { clave: 'modalidad', titulo: 'Modalidad', render: c => c.ModalidadCompra?.nombre },
