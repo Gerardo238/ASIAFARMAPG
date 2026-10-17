@@ -1,9 +1,9 @@
 // Actualiza el sistema a la última versión de GitHub.
 // Uso (en la carpeta backend):  npm run actualizar
 //
-// 1. Descarta cambios hechos a mano en los archivos del proyecto (la
-//    contraseña propia va en backend/.env.local, que no se toca).
-// 2. Descarga la última versión (git pull).
+// 1. Descarga la última versión y deja los archivos igual a GitHub,
+//    descartando cambios hechos a mano (la configuración propia va en
+//    backend/.env.local, que no se toca).
 // 3. Instala lo que haga falta en backend y frontend (npm install).
 // La base de datos se actualiza sola la próxima vez que arranque el backend.
 const { execSync } = require('child_process');
@@ -16,8 +16,9 @@ const correr = (titulo, comando, carpeta = raiz) => {
 };
 
 try {
-    correr('Descartando cambios locales en los archivos del proyecto...', 'git checkout -- .');
-    correr('Descargando la última versión de GitHub...', 'git pull');
+    correr('Descargando la última versión de GitHub...', 'git fetch origin');
+    // Deja los archivos igual a GitHub aunque se hayan cambiado a mano o copiado sueltos
+    correr('Aplicando la última versión...', 'git reset --hard @{u}');
     correr('Instalando dependencias del backend...', 'npm install --no-audit --no-fund', path.join(raiz, 'backend'));
     correr('Instalando dependencias del frontend...', 'npm install --no-audit --no-fund', path.join(raiz, 'frontend'));
     console.log('\nListo. Arranca el sistema con arrancar-sistema.bat (o "npm run dev" en backend y en frontend).');
