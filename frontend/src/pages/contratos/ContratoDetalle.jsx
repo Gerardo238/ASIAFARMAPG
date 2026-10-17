@@ -7,6 +7,7 @@ import { Pagina, Encabezado, Tarjeta, Tabla, Boton, DatoFicha, Insignia, BarraAv
 import { useDialogoMotivo, useAvisos } from '../../hooks/useDialogos';
 import { InsigniaContrato, InsigniaPedido } from '../../components/insignias';
 import Adjuntos from '../../components/Adjuntos';
+import { useColors } from '../../hooks/useColors';
 import { TIPOS_TRAMITE, ESTADOS_TRAMITE } from '../../utils/catalogos';
 import { formatFecha, hoyISO } from '../../utils/fechas';
 import { numero, moneda, mensajeError } from '../../utils/formato';
@@ -24,6 +25,7 @@ const ContratoDetalle = () => {
     const { id } = useParams();
     const navigate = useNavigate();
     const { usuario } = useAuth();
+    const c = useColors();
     const [contrato, setContrato] = useState(null);
     const [causas, setCausas] = useState(null);
     const [editar, setEditar] = useState(false);
@@ -85,7 +87,6 @@ const ContratoDetalle = () => {
     const vigente = contrato.estado === 'vigente';
     const tramites = contrato.tramites || [];
     const prorrogaEnTramite = tramites.find(t => t.tipo === 'prorroga' && t.estado === 'solicitada');
-    const conDevoluciones = contrato.renglones.some(r => r.cantidad_devuelta > 0);
     const puedeTramitar = puede(usuario, 'tramites.escribir');
     const opcionesCausa = (tipo) => Object.entries(causas?.[tipo] || {}).map(([value, label]) => ({ value, label }));
     const detalleTramite = (t) => {
@@ -110,19 +111,20 @@ const ContratoDetalle = () => {
                 <Boton variante="secundario" icono={ArrowLeft} onClick={() => navigate('/contratos')}>Contratos</Boton>
             </Encabezado>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mb-6">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-2">
                 <DatoFicha etiqueta="Estado" valor={<InsigniaContrato valor={contrato.estado} />} />
                 <DatoFicha etiqueta="Modalidad" valor={contrato.ModalidadCompra?.nombre} />
-                <DatoFicha etiqueta="Inicio" valor={formatFecha(contrato.fecha_inicio)} />
-                <DatoFicha etiqueta="Fin" valor={`${formatFecha(contrato.fecha_fin)} (${contrato.dias_para_fin} d)`} />
-                <DatoFicha etiqueta="Vida útil mínima" valor={contrato.vigencia_minima_meses != null ? `${contrato.vigencia_minima_meses} meses` : 'Parámetro general'} />
+                <DatoFicha etiqueta="Vence" valor={`${formatFecha(contrato.fecha_fin)}${vigente ? ` (${contrato.dias_para_fin} d)` : ''}`} />
                 <DatoFicha etiqueta="Monto" valor={moneda(contrato.monto_total)} />
-                <DatoFicha etiqueta="Entregado" valor={moneda(contrato.monto_entregado)} />
                 <DatoFicha etiqueta="Avance" valor={<BarraAvance porcentaje={contrato.porcentaje_avance} />} />
-                <DatoFicha etiqueta="Obligación de la institución" valor={contrato.contrato_abierto ? 'Abierto: el proveedor administra sus entregas' : 'Adquirir la cantidad adjudicada'} />
-                <DatoFicha etiqueta="Plazo de entrega" valor={`${contrato.plazo_entrega_dias} días hábiles`} />
-                {vigente && <DatoFicha etiqueta="Último día recomendado para pedir" valor={formatFecha(contrato.ultimo_dia_pedido)} />}
             </div>
+            {/* Lo demás, en una línea */}
+            <p className="text-[12.5px] mb-6" style={{ color: c.textSecondary }}>
+                Desde el {formatFecha(contrato.fecha_inicio)} · Entrega en {contrato.plazo_entrega_dias} días hábiles
+                {vigente && <> · Pedir antes del <b>{formatFecha(contrato.ultimo_dia_pedido)}</b></>}
+                {' · '}Vida útil mínima {contrato.vigencia_minima_meses ?? 'general'}{contrato.vigencia_minima_meses != null ? ' meses' : ''}
+                {contrato.contrato_abierto && ' · Contrato abierto'}
+            </p>
 
             <div className="space-y-3 mb-5">
                 {contrato.estado === 'vencido' && (
@@ -145,36 +147,40 @@ const ContratoDetalle = () => {
                 {contrato.advertencia_monto && <Aviso tono="amarillo">{contrato.advertencia_monto}</Aviso>}
             </div>
 
-            <Tarjeta titulo="Renglones y saldo">
+            <Tarjeta titulo="Productos del contrato">
                 <Tabla
                     claveFila="id_detalle_contrato"
                     filas={contrato.renglones}
                     columnas={[
                         { clave: 'numero_renglon', titulo: 'Renglón', alinear: 'right' },
                         { clave: 'producto', titulo: 'Producto', render: r => <Link to={`/productos/${r.id_producto}`} style={{ color: '#3D7EF6' }}>{r.Producto?.nombre} {r.Producto?.concentracion}</Link> },
-                        { clave: 'unidad', titulo: 'Unidad', render: r => r.Producto?.UnidadMedida?.nombre },
                         { clave: 'contratada', titulo: 'Contratado', alinear: 'right', render: r => numero(r.cantidad_contratada) },
-                        { clave: 'pedida', titulo: 'Pedido', alinear: 'right', render: r => numero(r.cantidad_pedida) },
-                        { clave: 'entregada', titulo: 'Entregado', alinear: 'right', render: r => numero(r.cantidad_entregada) },
-                        ...(conDevoluciones ? [{ clave: 'devuelta', titulo: 'Devuelto', alinear: 'right', render: r => r.cantidad_devuelta > 0 ? numero(r.cantidad_devuelta) : '—' }] : []),
-                        { clave: 'saldo', titulo: 'Saldo por pedir', alinear: 'right', render: r => r.saldo_por_pedir > 0 ? <b>{numero(r.saldo_por_pedir)}</b> : <Insignia tono="verde">Completo</Insignia> },
-                        { clave: 'precio', titulo: 'Precio', alinear: 'right', render: r => moneda(r.precio_unitario) },
-                        { clave: 'subtotal', titulo: 'Subtotal', alinear: 'right', render: r => moneda(r.subtotal) }
+                        {
+                            clave: 'entregada', titulo: 'Entregado', alinear: 'right', render: r => (
+                                <div>{numero(r.cantidad_entregada)}{r.cantidad_devuelta > 0 && <p className="text-[11px] opacity-70">{numero(r.cantidad_devuelta)} devueltas</p>}</div>
+                            )
+                        },
+                        {
+                            // Lo que falta entregar; si una parte ya está en pedidos en curso, se aclara abajo
+                            clave: 'falta', titulo: 'Falta entregar', alinear: 'right', render: r => {
+                                if (r.saldo_por_entregar <= 0) return <Insignia tono="verde">Completo</Insignia>;
+                                const enCurso = r.cantidad_pedida - r.cantidad_entregada;
+                                return <div><b>{numero(r.saldo_por_entregar)}</b>{enCurso > 0 && <p className="text-[11px] opacity-70">{numero(enCurso)} ya en pedidos</p>}</div>;
+                            }
+                        }
                     ]}
                 />
             </Tarjeta>
 
             <Tarjeta titulo="Prórrogas, notas técnicas y oficios" icono={Gavel}
-                nota="Lo que se tramita con la institución durante el contrato. Las prórrogas aprobadas cambian la fecha de fin."
                 acciones={puedeTramitar && !['anulado', 'cancelado'].includes(contrato.estado) && <>
                     {vigente && !prorrogaEnTramite && <Boton pequeno variante="secundario" icono={CalendarPlus} onClick={() => abrirTramite('prorroga')}>Solicitar prórroga</Boton>}
                     {vigente && contrato.contrato_abierto && <Boton pequeno variante="secundario" icono={ClipboardList} onClick={() => abrirTramite('nota_tecnica')}>Nota técnica</Boton>}
                     <Boton pequeno variante="secundario" icono={FileWarning} onClick={() => abrirTramite('oficio')}>Registrar oficio</Boton>
                 </>}>
-                <Tabla
+                {tramites.length === 0 ? <p className="text-[13px] opacity-70">Ninguno.</p> : <Tabla
                     claveFila="id_tramite"
                     filas={tramites}
-                    vacio="Sin prórrogas, notas técnicas ni oficios."
                     columnas={[
                         { clave: 'tipo', titulo: 'Trámite', render: t => <Insignia tono={TIPOS_TRAMITE[t.tipo]?.tono}>{TIPOS_TRAMITE[t.tipo]?.label}</Insignia> },
                         { clave: 'numero', titulo: 'Documento', render: t => <div><p className="font-medium">{t.numero_documento}</p><p className="text-[11px] opacity-70">{formatFecha(t.fecha_documento)}</p></div> },
@@ -195,7 +201,7 @@ const ContratoDetalle = () => {
                             )
                         }
                     ]}
-                />
+                />}
             </Tarjeta>
 
             <Tarjeta titulo="Pedidos del contrato" icono={Truck}>
