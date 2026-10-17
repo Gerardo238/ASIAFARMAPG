@@ -115,6 +115,8 @@ const Productos = () => {
                         clave: 'existencia', titulo: 'Existencia', alinear: 'right', render: p => (
                             <div>
                                 <span className="font-bold">{numero(p.existencia)}</span>
+                                {/* Lo que está en bodega pero no se puede despachar (cuarentena, bloqueado, vencido), p. ej. una devolución en revisión */}
+                                {p.existencia_retenida > 0 && <div className="text-[11px]" style={{ color: '#A16A00' }}>+{numero(p.existencia_retenida)} retenidas (cuarentena o vencidas)</div>}
                                 {p.bajo_minimo && p.activo && <div><Insignia tono="rojo">Bajo mínimo ({numero(p.stock_minimo)})</Insignia></div>}
                             </div>
                         )
