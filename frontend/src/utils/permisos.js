@@ -18,11 +18,18 @@ const PERMISOS = {
     'pedidos.entregar': ['administrador', 'bodeguero', 'encargado_contratos'],
     'pedidos.ajustar': ['administrador', 'encargado_contratos'],
     'pedidos.anular': ['administrador'],
+    'pedidos.compromiso': ['administrador', 'encargado_contratos'],
+    'pedidos.devolucion': ['administrador', 'bodeguero', 'encargado_contratos'],
+    'pedidos.anular_devolucion': ['administrador'],
+    'tramites.escribir': ['administrador', 'encargado_contratos'],
+    'tramites.anular': ['administrador'],
     'catalogos.escribir': ['administrador'],
     'proveedores.escribir': ['administrador', 'bodeguero'],
     'catalogos.anular': ['administrador'],
     'usuarios.escribir': ['administrador'],
     'adjuntos.subir': ['administrador', 'bodeguero'],
+    'adjuntos.contratos': ['administrador', 'encargado_contratos'],
+    'adjuntos.pedidos': ['administrador', 'bodeguero', 'encargado_contratos'],
     'adjuntos.anular': ['administrador']
 };
 

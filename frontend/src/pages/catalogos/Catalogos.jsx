@@ -28,7 +28,16 @@ const CATALOGOS = [
     { clave: 'formas-farmaceuticas', titulo: 'Formas farmacéuticas', id: 'id_forma_farmaceutica', permiso: 'catalogos.escribir', campos: [{ clave: 'nombre', titulo: 'Nombre', obligatorio: true }, { clave: 'descripcion', titulo: 'Descripción' }] },
     { clave: 'unidades-medida', titulo: 'Unidades de medida', id: 'id_unidad_medida', permiso: 'catalogos.escribir', campos: [{ clave: 'nombre', titulo: 'Nombre', obligatorio: true }, { clave: 'descripcion', titulo: 'Descripción' }] },
     { clave: 'tipos-institucion', titulo: 'Tipos de institución', id: 'id_tipo_institucion', permiso: 'catalogos.escribir', campos: [{ clave: 'nombre', titulo: 'Nombre', obligatorio: true }, { clave: 'descripcion', titulo: 'Descripción' }] },
-    { clave: 'modalidades-compra', titulo: 'Modalidades de compra', id: 'id_modalidad', permiso: 'catalogos.escribir', campos: [{ clave: 'nombre', titulo: 'Nombre', obligatorio: true }, { clave: 'descripcion', titulo: 'Descripción' }] },
+    {
+        clave: 'modalidades-compra', titulo: 'Modalidades de compra', id: 'id_modalidad', permiso: 'catalogos.escribir',
+        ayuda: 'El rango de monto avisa si un contrato no corresponde a su modalidad. El plazo (días hábiles) sugiere la fecha de entrega de cada pedido. En contrato abierto la institución no está obligada a comprar todo lo adjudicado.',
+        campos: [
+            { clave: 'nombre', titulo: 'Nombre', obligatorio: true }, { clave: 'descripcion', titulo: 'Descripción' },
+            { clave: 'monto_minimo', titulo: 'Monto mínimo (Q)', tipo: 'number' }, { clave: 'monto_maximo', titulo: 'Monto máximo (Q)', tipo: 'number' },
+            { clave: 'dias_habiles_entrega', titulo: 'Plazo de entrega (días hábiles)', tipo: 'number', paso: '1' },
+            { clave: 'contrato_abierto', titulo: 'Contrato abierto', obligatorio: true, opciones: [{ value: 'true', label: 'Sí' }, { value: 'false', label: 'No' }] }
+        ]
+    },
     {
         clave: 'motivos-movimiento', titulo: 'Motivos de movimiento', id: 'id_motivo', permiso: 'catalogos.escribir',
         ayuda: 'Los motivos marcados como "Sistema" (compra, despacho, anulaciones) los usa el sistema y no se modifican.',
@@ -74,19 +83,19 @@ const Catalogo = ({ def }) => {
             {aviso}{dialogo}
             <div className="flex flex-wrap justify-between items-center gap-3 mb-3">
                 {def.ayuda ? <Aviso className="flex-1">{def.ayuda}</Aviso> : <span />}
-                {puedeEscribir && <Boton icono={Plus} onClick={() => { setError(''); setForm(Object.fromEntries(def.campos.map(c => [c.clave, '']))); }}>Agregar</Boton>}
+                {puedeEscribir && <Boton icono={Plus} onClick={() => { setError(''); setForm(Object.fromEntries(def.campos.map(c => [c.clave, c.opciones?.length === 2 && c.opciones[1].value === 'false' ? 'false' : '']))); }}>Agregar</Boton>}
             </div>
             <Tabla
                 claveFila={def.id}
                 filas={datos}
                 cargando={cargando}
                 columnas={[
-                    ...def.campos.map(c => ({ clave: c.clave, titulo: c.titulo, render: r => c.opciones ? c.opciones.find(o => o.value === r[c.clave])?.label : (r[c.clave] || '—') })),
+                    ...def.campos.map(c => ({ clave: c.clave, titulo: c.titulo, render: r => c.opciones ? c.opciones.find(o => o.value === String(r[c.clave]))?.label : (r[c.clave] ?? '—') })),
                     { clave: 'activo', titulo: 'Estado', render: r => <div className="flex gap-1"><InsigniaActivo activo={r.activo} />{r.sistema && <Insignia tono="azul"><Lock size={10} className="inline" /> Sistema</Insignia>}</div> },
                     {
                         clave: 'acc', titulo: '', render: r => !r.sistema && (
                             <div className="flex gap-2">
-                                {puedeEscribir && r.activo && <Boton pequeno variante="info" icono={Pencil} onClick={() => { setError(''); setForm({ _id: r[def.id], ...Object.fromEntries(def.campos.map(c => [c.clave, r[c.clave] ?? ''])) }); }}>Editar</Boton>}
+                                {puedeEscribir && r.activo && <Boton pequeno variante="info" icono={Pencil} onClick={() => { setError(''); setForm({ _id: r[def.id], ...Object.fromEntries(def.campos.map(c => [c.clave, r[c.clave] === null || r[c.clave] === undefined ? '' : String(r[c.clave])])) }); }}>Editar</Boton>}
                                 {puedeAnular && (r.activo
                                     ? <Boton pequeno variante="peligro" icono={Ban} onClick={() => anular(r)}>Anular</Boton>
                                     : <Boton pequeno variante="exito" icono={RotateCcw} onClick={() => restaurar(r)}>Restaurar</Boton>)}
@@ -103,7 +112,8 @@ const Catalogo = ({ def }) => {
                             <Campo key={c.clave} etiqueta={c.titulo} obligatorio={c.obligatorio}>
                                 {c.opciones
                                     ? <Selector vacio="Seleccionar" required={c.obligatorio} value={form[c.clave]} onChange={e => setForm({ ...form, [c.clave]: e.target.value })} opciones={c.opciones} />
-                                    : <Entrada required={c.obligatorio} value={form[c.clave]} onChange={e => setForm({ ...form, [c.clave]: e.target.value })} />}
+                                    : <Entrada required={c.obligatorio} type={c.tipo || 'text'} min={c.tipo === 'number' ? '0' : undefined} step={c.tipo === 'number' ? (c.paso || '0.01') : undefined}
+                                        value={form[c.clave]} onChange={e => setForm({ ...form, [c.clave]: e.target.value })} />}
                             </Campo>
                         ))}
                         {error && <Aviso tono="rojo">{error}</Aviso>}
@@ -119,7 +129,10 @@ const DESCRIPCION_PARAM = {
     VIGENCIA_MINIMA_DESPACHO_MESES: 'Vida útil mínima al despachar, por defecto (meses)',
     DIAS_SEMAFORO_ROJO: 'Semáforo rojo: días antes del vencimiento',
     DIAS_SEMAFORO_AMARILLO: 'Semáforo amarillo: días antes del vencimiento',
-    DIAS_ALERTA_CONTRATO: 'Alerta de contrato por vencer (días)'
+    DIAS_ALERTA_CONTRATO: 'Alerta de contrato por vencer (días)',
+    DIAS_ALERTA_PEDIDO: 'Alerta de entrega próxima sin despachar (días)',
+    DIAS_HABILES_ENTREGA: 'Plazo de entrega por defecto (días hábiles)',
+    LIMITE_OFICIOS: 'Oficios de advertencia antes de que dejen de comprar'
 };
 
 const Parametros = () => {

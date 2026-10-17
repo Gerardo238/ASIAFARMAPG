@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Truck, ArrowLeft, PackageCheck, ChevronRight, Ban, Wand2, Pencil, Scissors, Building2 } from 'lucide-react';
+import { Truck, ArrowLeft, PackageCheck, ChevronRight, Ban, Wand2, Pencil, Scissors, Building2, Undo2, FileSignature } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useColors, MARCA } from '../../hooks/useColors';
-import { Pagina, Tarjeta, Tabla, Boton, Modal, Campo, Entrada, AreaTexto, Aviso, DatoFicha, Insignia, CodigoLote } from '../../components/ui';
+import { Pagina, Tarjeta, Tabla, Boton, Modal, Campo, Entrada, AreaTexto, Selector, Aviso, DatoFicha, Insignia, CodigoLote } from '../../components/ui';
+import Adjuntos from '../../components/Adjuntos';
 import { useTonos } from '../../hooks/useTonos';
 import { useDialogoMotivo, useAvisos } from '../../hooks/useDialogos';
 import { InsigniaPedido } from '../../components/insignias';
@@ -19,7 +20,7 @@ const PASO_SIGUIENTE = {
     en_preparacion: { quien: 'Bodega', texto: 'Separa la mercadería de los lotes asignados y marca el pedido como empacado.' },
     empacado: { quien: 'Bodega', texto: 'Cuando sale el transporte, marca el pedido "En transporte".' },
     en_transporte: { quien: 'Encargado de contratos', texto: 'Cuando la institución confirma que recibió, registra la entrega con la fecha real.' },
-    entregado: { quien: null, texto: 'Pedido cerrado. Lo entregado ya cuenta en el avance del contrato.' },
+    entregado: { quien: null, texto: 'Pedido cerrado. Lo entregado ya cuenta en el avance del contrato. Si la institución devuelve producto, regístralo aquí para que regrese a su lote y al saldo del contrato.' },
     anulado: { quien: null, texto: 'Pedido anulado. Su cantidad regresó al saldo del contrato.' }
 };
 
@@ -51,6 +52,8 @@ const PedidoDetalle = () => {
     const [propuesta, setPropuesta] = useState(null);
     const [avance, setAvance] = useState(null);
     const [edicion, setEdicion] = useState(null);
+    const [devolucion, setDevolucion] = useState(null);
+    const [compromiso, setCompromiso] = useState(null);
     const [error, setError] = useState('');
     const [procesando, setProcesando] = useState(false);
     const [dialogo, pedirMotivo] = useDialogoMotivo();
@@ -108,6 +111,33 @@ const PedidoDetalle = () => {
         catch (err) { setError(mensajeError(err)); }
     };
 
+    const guardarDevolucion = async (e) => {
+        e.preventDefault();
+        setError('');
+        const lineas = Object.entries(devolucion.cantidades).filter(([, v]) => Number(v) > 0).map(([id_asignacion, cantidad]) => ({ id_asignacion, cantidad }));
+        try {
+            const r = await api.post(`/pedidos/${id}/devolucion`, { ...devolucion, lineas });
+            setDevolucion(null); mostrar(r.data.mensaje); cargar();
+        } catch (err) { setError(mensajeError(err)); }
+    };
+
+    const anularDevolucion = async (d) => {
+        const motivo = await pedirMotivo({
+            titulo: 'Anular la devolución', peligro: true, confirmar: 'Anular devolución',
+            mensaje: 'Úsalo si la devolución se registró por error: el producto vuelve a salir de los lotes y cuenta otra vez como entregado. Solo es posible si los lotes todavía tienen esas unidades.'
+        });
+        if (!motivo) return;
+        try { const r = await api.post(`/pedidos/devoluciones/${d.id_devolucion}/anular`, { motivo }); mostrar(r.data.mensaje); cargar(); }
+        catch (err) { mostrar(mensajeError(err), 'rojo'); }
+    };
+
+    const guardarCompromiso = async (e) => {
+        e.preventDefault();
+        setError('');
+        try { const r = await api.post(`/pedidos/${id}/compromiso`, compromiso); setCompromiso(null); mostrar(r.data.mensaje); cargar(); }
+        catch (err) { setError(mensajeError(err)); }
+    };
+
     const seguimiento = pedido.SeguimientoPedidos || [];
     // La última vez que el pedido pasó por cada etapa
     const etapa = (estado) => [...seguimiento].reverse().find(s => s.estado === estado);
@@ -119,6 +149,18 @@ const PedidoDetalle = () => {
     const unidades = lineas.reduce((s, d) => s + Number(d.cantidad), 0);
     const puedeEditar = puede(usuario, 'pedidos.crear') && pedido.estado === 'pendiente';
     const puedeAnular = puede(usuario, 'pedidos.anular') && !['entregado', 'anulado'].includes(pedido.estado);
+    // La carta de compromiso se presenta antes de que el pedido se atrase
+    const puedeComprometer = puede(usuario, 'pedidos.compromiso') && !['entregado', 'anulado'].includes(pedido.estado) && !pedido.retrasado && pedido.dias_para_entrega >= 0;
+    const devoluciones = pedido.devoluciones || [];
+    // Unidades ya devueltas de cada lote asignado (devoluciones vigentes)
+    const devueltoAsig = {};
+    devoluciones.filter(d => d.estado === 'registrada').forEach(d => d.DetalleDevolucions.forEach(x => {
+        devueltoAsig[x.id_asignacion] = (devueltoAsig[x.id_asignacion] || 0) + Number(x.cantidad);
+    }));
+    const asignaciones = lineas.flatMap(d => (d.AsignacionLotes || []).map(a => ({ ...a, producto: d.Producto?.nombre, concentracion: d.Producto?.concentracion, devolvible: Number(a.cantidad) - (devueltoAsig[a.id_asignacion] || 0) })));
+    const puedeDevolver = puede(usuario, 'pedidos.devolucion') && pedido.estado === 'entregado' && asignaciones.some(a => a.devolvible > 0);
+    const abrirDevolucion = () => { setError(''); setDevolucion({ fecha_devolucion: hoyISO(), causa: '', documento: '', descripcion: '', cuarentena: true, cantidades: {} }); };
+    const causas = pedido.causas_devolucion || {};
 
     return (
         <Pagina>
@@ -144,8 +186,9 @@ const PedidoDetalle = () => {
                         </div>
                         <div className="flex flex-col items-end gap-2">
                             <InsigniaPedido valor={pedido.estado} />
-                            {pedido.retrasado && pedido.estado !== 'entregado' && <Insignia tono="rojo">{pedido.dias_retraso} d de retraso</Insignia>}
-                            {pedido.estado === 'entregado' && <Insignia tono={pedido.retrasado ? 'rojo' : 'verde'}>{pedido.retrasado ? `Llegó ${pedido.dias_retraso} d tarde` : 'Entregado a tiempo'}</Insignia>}
+                            {pedido.retrasado && pedido.estado !== 'entregado' && <Insignia tono="rojo">{pedido.dias_retraso} d hábiles de retraso</Insignia>}
+                            {pedido.estado === 'entregado' && <Insignia tono={pedido.retrasado ? 'rojo' : 'verde'}>{pedido.retrasado ? `Llegó ${pedido.dias_retraso} d hábiles tarde` : 'Entregado a tiempo'}</Insignia>}
+                            {pedido.unidades_devueltas > 0 && <Insignia tono="amarillo">{pedido.unidades_devueltas >= unidades ? 'Devuelto completo' : `Devolución parcial: ${numero(pedido.unidades_devueltas)} u.`}</Insignia>}
                             {pedido.entrega_proxima && <Insignia tono="amarillo">{pedido.dias_para_entrega === 0 ? 'Se entrega hoy' : `Entrega en ${pedido.dias_para_entrega} d`}</Insignia>}
                         </div>
                     </div>
@@ -153,9 +196,15 @@ const PedidoDetalle = () => {
                         <DatoFicha etiqueta="Pedido el" valor={formatFecha(pedido.fecha_pedido)} />
                         <DatoFicha etiqueta="Entrega programada" valor={formatFecha(pedido.fecha_programada)} />
                         <DatoFicha etiqueta="Entrega real" valor={pedido.fecha_real_entrega ? formatFecha(pedido.fecha_real_entrega) : '—'} />
-                        <DatoFicha etiqueta="Unidades" valor={numero(unidades)} />
+                        <DatoFicha etiqueta="Unidades" valor={pedido.unidades_devueltas > 0 ? `${numero(unidades)} (−${numero(pedido.unidades_devueltas)} devueltas)` : numero(unidades)} />
                         <DatoFicha etiqueta="Monto" valor={moneda(pedido.monto_total)} />
                     </div>
+                    {pedido.fecha_compromiso && (
+                        <p className="text-[13px] mt-4 flex items-center gap-1.5" style={{ color: c.textPrimary }}>
+                            <FileSignature size={14} style={{ color: c.textSecondary }} />
+                            Carta de compromiso {pedido.documento_compromiso}: entrega a más tardar el <b>{formatFecha(pedido.fecha_compromiso)}</b>. El retraso se cuenta desde el día hábil siguiente.
+                        </p>
+                    )}
                     {pedido.observaciones && <p className="text-[13px] mt-4 italic" style={{ color: c.textSecondary }}>“{pedido.observaciones}”</p>}
                 </Tarjeta>
 
@@ -171,6 +220,13 @@ const PedidoDetalle = () => {
                         )}
                         {siguiente && puedeAvanzar && (
                             <Boton variante="claro" icono={ChevronRight} onClick={() => { setError(''); setAvance({ observacion: '', fecha_entrega: hoyISO() }); }}>{siguiente}</Boton>
+                        )}
+                        {puedeDevolver && <Boton variante="claro" icono={Undo2} onClick={abrirDevolucion}>Registrar devolución</Boton>}
+                        {puedeComprometer && (
+                            <button onClick={() => { setError(''); setCompromiso({ fecha_compromiso: '', documento: '', motivo: '' }); }}
+                                className="af-boton flex items-center justify-center gap-1.5 h-9 rounded-[7px] text-[13px] text-white/85 hover:bg-white/10" style={{ border: '1px solid rgba(255,255,255,0.25)' }}>
+                                <FileSignature size={14} />Carta de compromiso (más tiempo)
+                            </button>
                         )}
                         {(puedeEditar || puedeAnular) && (
                             <div className="flex gap-2 mt-1">
@@ -242,7 +298,10 @@ const PedidoDetalle = () => {
                                         {d.AsignacionLotes.map(a => (
                                             <Link key={a.id_asignacion} to={`/trazabilidad/lote/${a.id_lote}`} className="flex items-center justify-between gap-2 rounded-[5px] px-2 py-1 hover:brightness-95" style={{ backgroundColor: c.suave }}>
                                                 <CodigoLote numero={a.Lote?.numero_lote} />
-                                                <span className=" text-[11.5px]" style={{ color: c.textSecondary }}>EXP {formatFecha(a.Lote?.fecha_vencimiento)} · <b style={{ color: c.textPrimary }}>{numero(a.cantidad)}</b></span>
+                                                <span className=" text-[11.5px]" style={{ color: c.textSecondary }}>
+                                                    EXP {formatFecha(a.Lote?.fecha_vencimiento)} · <b style={{ color: c.textPrimary }}>{numero(a.cantidad)}</b>
+                                                    {devueltoAsig[a.id_asignacion] > 0 && <span style={{ color: MARCA.rojo }}> · −{numero(devueltoAsig[a.id_asignacion])} devueltas</span>}
+                                                </span>
                                             </Link>
                                         ))}
                                     </div>
@@ -252,6 +311,41 @@ const PedidoDetalle = () => {
                     </div>
                 </Tarjeta>
             </div>
+
+            {/* Devoluciones de la institución: de qué lote regresó cada cantidad */}
+            {devoluciones.length > 0 && (
+                <Tarjeta titulo="Devoluciones de la institución" icono={Undo2} nota="El producto regresó al mismo lote del que salió y la cantidad volvió al saldo del contrato.">
+                    <div className="space-y-3">
+                        {devoluciones.map(d => (
+                            <div key={d.id_devolucion} className="rounded-[10px] px-4 py-3" style={{ backgroundColor: d.estado === 'anulada' ? 'transparent' : c.suave, border: d.estado === 'anulada' ? `1px dashed ${c.inputBorder}` : '1px solid transparent' }}>
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                    <div>
+                                        <p className="font-medium text-[14px]" style={{ color: c.textPrimary }}>
+                                            {formatFecha(d.fecha_devolucion)} · {causas[d.causa] || d.causa}{d.documento ? ` · Acta ${d.documento}` : ''}
+                                        </p>
+                                        <p className="text-[12.5px] mt-0.5" style={{ color: c.textSecondary }}>{d.descripcion}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {d.estado === 'anulada' ? <Insignia tono="gris">Anulada</Insignia> : <Insignia tono="amarillo">{numero(d.unidades)} u. · {moneda(d.monto)}</Insignia>}
+                                        {d.estado === 'registrada' && puede(usuario, 'pedidos.anular_devolucion') && <Boton pequeno variante="peligro" icono={Ban} onClick={() => anularDevolucion(d)}>Anular</Boton>}
+                                    </div>
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {d.DetalleDevolucions.map(x => (
+                                        <Link key={x.id_detalle_devolucion} to={`/trazabilidad/lote/${x.id_lote}`} className="flex items-center gap-2 rounded-[5px] px-2 py-1 hover:brightness-95" style={{ backgroundColor: c.card }}>
+                                            <CodigoLote numero={x.Lote?.numero_lote} />
+                                            <span className="text-[11.5px]" style={{ color: c.textSecondary }}>{x.DetallePedido?.Producto?.nombre} · <b style={{ color: c.textPrimary }}>{numero(x.cantidad)}</b> · lote {x.Lote?.condicion}</span>
+                                        </Link>
+                                    ))}
+                                </div>
+                                <p className="text-[11.5px] mt-2" style={{ color: c.textSecondary }}>
+                                    Registró {d.Usuario?.nombre} {d.Usuario?.apellido} · {formatFechaHora(d.createdAt)}{d.estado === 'anulada' && d.motivo_anulacion ? ` · Anulada: ${d.motivo_anulacion}` : ''}
+                                </p>
+                            </div>
+                        ))}
+                    </div>
+                </Tarjeta>
+            )}
 
             {/* Propuesta FEFO antes de preparar */}
             {pedido.estado === 'pendiente' && propuesta && (
@@ -305,6 +399,76 @@ const PedidoDetalle = () => {
                         <Campo etiqueta="Observación" ayuda="Ej. guía de transporte, quién recibió, número de acta.">
                             <AreaTexto value={avance.observacion} onChange={e => setAvance({ ...avance, observacion: e.target.value })} />
                         </Campo>
+                        {error && <Aviso tono="rojo">{error}</Aviso>}
+                    </form>
+                )}
+            </Modal>
+
+            {pedido.estado !== 'pendiente' && pedido.estado !== 'anulado' && (
+                <Adjuntos entidad="pedidos" id={pedido.id_pedido} permiso="adjuntos.pedidos" tipoInicial="Acta o constancia"
+                    titulo="Actas y documentos del pedido" nota="Acta de entrega, guía de transporte, carta de compromiso o acta de devolución."
+                    vacio="Todavía no hay documentos. Toca aquí para adjuntar el acta de entrega, la carta de compromiso o el acta de devolución." />
+            )}
+
+            <Modal abierto={!!devolucion} titulo={`Registrar devolución de ${pedido.numero_pedido}`} alCerrar={() => setDevolucion(null)} ancho="max-w-3xl"
+                pie={<><Boton variante="secundario" onClick={() => setDevolucion(null)}>Cancelar</Boton><Boton type="submit" form="form-devolucion">Registrar devolución</Boton></>}>
+                {devolucion && (
+                    <form id="form-devolucion" onSubmit={guardarDevolucion} className="space-y-4">
+                        <Aviso>El producto regresa al mismo lote del que salió (queda en el kárdex ligado a este pedido) y la cantidad vuelve al saldo del contrato para poder reponerla. Si fue un error, se puede anular después.</Aviso>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <Campo etiqueta="Fecha de la devolución" obligatorio>
+                                <Entrada type="date" required min={pedido.fecha_real_entrega} max={hoyISO()} value={devolucion.fecha_devolucion} onChange={e => setDevolucion({ ...devolucion, fecha_devolucion: e.target.value })} />
+                            </Campo>
+                            <Campo etiqueta="Causa" obligatorio>
+                                <Selector vacio="Seleccionar" required value={devolucion.causa} onChange={e => setDevolucion({ ...devolucion, causa: e.target.value })}
+                                    opciones={Object.entries(causas).map(([value, label]) => ({ value, label }))} />
+                            </Campo>
+                            <Campo etiqueta="No. de acta o nota">
+                                <Entrada value={devolucion.documento} onChange={e => setDevolucion({ ...devolucion, documento: e.target.value })} />
+                            </Campo>
+                        </div>
+                        <Tabla
+                            claveFila="id_asignacion"
+                            filas={asignaciones}
+                            columnas={[
+                                { clave: 'lote', titulo: 'Lote', render: a => <CodigoLote numero={a.Lote?.numero_lote} /> },
+                                { clave: 'producto', titulo: 'Producto', render: a => `${a.producto} ${a.concentracion || ''}` },
+                                { clave: 'vence', titulo: 'Vence', render: a => formatFecha(a.Lote?.fecha_vencimiento) },
+                                { clave: 'entregado', titulo: 'Entregado', alinear: 'right', render: a => numero(a.cantidad) },
+                                { clave: 'devolvible', titulo: 'Puede devolver', alinear: 'right', render: a => numero(a.devolvible) },
+                                {
+                                    clave: 'cantidad', titulo: 'Devuelve', render: a => (
+                                        <div className="w-28">
+                                            <Entrada type="number" min="0" max={a.devolvible} step="any" disabled={a.devolvible <= 0}
+                                                value={devolucion.cantidades[a.id_asignacion] || ''}
+                                                onChange={e => setDevolucion({ ...devolucion, cantidades: { ...devolucion.cantidades, [a.id_asignacion]: e.target.value } })} />
+                                        </div>
+                                    )
+                                }
+                            ]}
+                        />
+                        <Campo etiqueta="Qué pasó" obligatorio ayuda="Ej. la institución recibió el producto vencido; quién lo devolvió y cómo llegó.">
+                            <AreaTexto required value={devolucion.descripcion} onChange={e => setDevolucion({ ...devolucion, descripcion: e.target.value })} />
+                        </Campo>
+                        <label className="flex items-start gap-2 text-[13px]" style={{ color: c.textPrimary }}>
+                            <input type="checkbox" className="mt-0.5" checked={devolucion.cuarentena} onChange={e => setDevolucion({ ...devolucion, cuarentena: e.target.checked })} />
+                            <span>Poner el lote en cuarentena para revisar el producto devuelto antes de volver a despacharlo. <span style={{ color: c.textSecondary }}>Un lote ya vencido queda como vencido.</span></span>
+                        </label>
+                        {error && <Aviso tono="rojo">{error}</Aviso>}
+                    </form>
+                )}
+            </Modal>
+
+            <Modal abierto={!!compromiso} titulo="Carta de compromiso de entrega" alCerrar={() => setCompromiso(null)} ancho="max-w-lg"
+                pie={<><Boton variante="secundario" onClick={() => setCompromiso(null)}>Cancelar</Boton><Boton type="submit" form="form-compromiso">Registrar</Boton></>}>
+                {compromiso && (
+                    <form id="form-compromiso" onSubmit={guardarCompromiso} className="space-y-4">
+                        <Aviso>Si no se puede entregar el {formatFecha(pedido.fecha_limite)}, la droguería envía una carta indicando cuánto tiempo necesita. Si tampoco se cumple, el retraso se cuenta desde el día hábil siguiente a la nueva fecha. No puede pasar del fin del contrato ({formatFecha(pedido.Contrato?.fecha_fin)}).</Aviso>
+                        <Campo etiqueta="Nueva fecha de entrega" obligatorio>
+                            <Entrada type="date" required min={pedido.fecha_limite} max={pedido.Contrato?.fecha_fin} value={compromiso.fecha_compromiso} onChange={e => setCompromiso({ ...compromiso, fecha_compromiso: e.target.value })} />
+                        </Campo>
+                        <Campo etiqueta="No. o referencia de la carta" obligatorio><Entrada required value={compromiso.documento} onChange={e => setCompromiso({ ...compromiso, documento: e.target.value })} /></Campo>
+                        <Campo etiqueta="Por qué se necesita más tiempo" obligatorio><AreaTexto required value={compromiso.motivo} onChange={e => setCompromiso({ ...compromiso, motivo: e.target.value })} /></Campo>
                         {error && <Aviso tono="rojo">{error}</Aviso>}
                     </form>
                 )}

@@ -48,4 +48,60 @@ const formatoGT = (iso) => {
     return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`;
 };
 
-module.exports = { hoy, esFechaValida, normalizarFecha, sumarDias, sumarMeses, diasEntre, formatoGT };
+// ---------- Días hábiles ----------
+// Los plazos de entrega del Estado se cuentan en días hábiles: de lunes a
+// viernes, sin asuetos nacionales. El 24 y el 31 de diciembre son medio día
+// y se cuentan como hábiles.
+const ASUETOS_FIJOS = ['01-01', '05-01', '06-30', '09-15', '10-20', '11-01', '12-25'];
+
+// Domingo de Pascua (algoritmo de Meeus/Jones/Butcher), para la Semana Santa
+const pascua = (anio) => {
+    const a = anio % 19, b = Math.floor(anio / 100), c = anio % 100;
+    const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const mes = Math.floor((h + l - 7 * m + 114) / 31), dia = ((h + l - 7 * m + 114) % 31) + 1;
+    return `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+};
+
+const asuetosDelAnio = {};
+const esAsueto = (iso) => {
+    const anio = Number(iso.slice(0, 4));
+    if (!asuetosDelAnio[anio]) {
+        const domingo = pascua(anio);
+        asuetosDelAnio[anio] = new Set([...ASUETOS_FIJOS.map(md => `${anio}-${md}`), sumarDias(domingo, -3), sumarDias(domingo, -2)]);
+    }
+    return asuetosDelAnio[anio].has(iso);
+};
+
+const esDiaHabil = (iso) => {
+    const [a, m, d] = aPartes(iso);
+    const dia = new Date(Date.UTC(a, m - 1, d)).getUTCDay();
+    return dia !== 0 && dia !== 6 && !esAsueto(iso);
+};
+
+// Fecha que resulta de avanzar (o retroceder, si dias < 0) N días hábiles
+const sumarDiasHabiles = (iso, dias) => {
+    let fecha = iso;
+    let faltan = Math.abs(dias);
+    const paso = dias < 0 ? -1 : 1;
+    while (faltan > 0) {
+        fecha = sumarDias(fecha, paso);
+        if (esDiaHabil(fecha)) faltan -= 1;
+    }
+    return fecha;
+};
+
+// Días hábiles después de 'desde' hasta 'hasta' inclusive (0 si 'hasta' no es posterior).
+// Así el retraso empieza a contar el día hábil siguiente a la fecha comprometida.
+const diasHabilesEntre = (desde, hasta) => {
+    if (hasta <= desde) return 0;
+    let n = 0;
+    for (let f = sumarDias(desde, 1); f <= hasta; f = sumarDias(f, 1)) if (esDiaHabil(f)) n += 1;
+    return n;
+};
+
+module.exports = {
+    hoy, esFechaValida, normalizarFecha, sumarDias, sumarMeses, diasEntre, formatoGT,
+    esDiaHabil, sumarDiasHabiles, diasHabilesEntre
+};

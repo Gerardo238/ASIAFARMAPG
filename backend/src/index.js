@@ -1,8 +1,9 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+require('./config/entorno');
 const sequelize = require('./config/database');
 require('./models/index');
+const { aplicarMigraciones } = require('./config/migraciones');
 const { sembrarCatalogos } = require('./seeders/catalogos');
 const { programarVencimientos } = require('./services/vencimientos');
 
@@ -18,6 +19,7 @@ const pedidoRoutes = require('./routes/pedidoRoutes');
 const catalogoRoutes = require('./routes/catalogoRoutes');
 const consultaRoutes = require('./routes/consultaRoutes');
 const adjuntoRoutes = require('./routes/adjuntoRoutes');
+const tramiteRoutes = require('./routes/tramiteRoutes');
 
 const app = express();
 
@@ -39,6 +41,7 @@ app.use('/api/contratos', contratoRoutes);
 app.use('/api/pedidos', pedidoRoutes);
 app.use('/api/catalogos', catalogoRoutes);
 app.use('/api/adjuntos', adjuntoRoutes);
+app.use('/api/tramites', tramiteRoutes);
 app.use('/api', consultaRoutes);
 
 // sync() crea las tablas que falten sin tocar las existentes.
@@ -49,6 +52,7 @@ sequelize.authenticate()
         console.log('Conexión a la base de datos exitosa');
         return sequelize.sync(process.env.DB_SYNC === 'alter' ? { alter: true } : {});
     })
+    .then(() => aplicarMigraciones())
     .then(() => sembrarCatalogos())
     .then(() => {
         programarVencimientos();

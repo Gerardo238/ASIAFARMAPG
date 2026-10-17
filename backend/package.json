@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "actualizar": "node scripts/actualizar.js",
     "db:reset": "node src/seeders/reset.js",
     "seed:admin": "node src/seeders/createAdmin.js",
     "seed:demo": "node src/seeders/demo.js",

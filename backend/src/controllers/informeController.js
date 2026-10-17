@@ -5,17 +5,18 @@ const { Op } = require('sequelize');
 const {
     Pedido, Contrato, Institucion, Ingreso, Proveedor, Lote, Laboratorio, Producto, Movimiento,
     AsignacionLote, DetallePedido, SeguimientoPedido, Auditoria, Usuario, Ubicacion, UnidadMedida, FormaFarmaceutica,
-    MotivoMovimiento, ModalidadCompra
+    MotivoMovimiento, ModalidadCompra, TramiteContrato, DevolucionPedido, DetalleDevolucion, DetalleContrato
 } = require('../models/index');
 const { manejarError, ErrorNegocio } = require('../utils/errores');
 const { obtenerParametros } = require('../services/parametros');
 const { semaforo, redondear } = require('../services/inventario');
 const { cargarConAvance } = require('./contratoController');
-const { calcularRetraso, ETIQUETAS } = require('./pedidoController');
+const { calcularRetraso, ETIQUETAS, CAUSAS_DEVOLUCION } = require('./pedidoController');
+const { CAUSAS_PRORROGA, CAUSAS_OFICIO, ETIQUETA: ETIQUETA_TRAMITE } = require('./tramiteController');
 const { INCLUDE_MOVIMIENTO } = require('./movimientoController');
 const { resumirLotes } = require('./productoController');
 const { lotesSinDestino, esEntregaProxima, resumirEntregas, evaluarContratosCerrados, PEDIDO_CON_CONTRATO } = require('../services/analisis');
-const { hoy, esFechaValida, diasEntre, sumarMeses } = require('../utils/fechas');
+const { hoy, esFechaValida, diasEntre, sumarMeses, formatoGT } = require('../utils/fechas');
 
 const col = (clave, titulo, tipo = 'texto') => ({ clave, titulo, tipo });
 const ESTADO_LOTE = { disponible: 'Disponible', cuarentena: 'Cuarentena', bloqueado: 'Bloqueado', agotado: 'Agotado', vencido: 'Vencido', anulado: 'Anulado' };
@@ -46,6 +47,40 @@ const COLS_CONTRATO = [
     col('porcentaje_avance', 'Avance', 'porcentaje')
 ];
 
+// Lo que las instituciones devolvieron (devoluciones vigentes), para que las
+// ventas cuenten solo lo que se quedó: { porPedido: { id: monto }, porDetalle: { id: cantidad } }
+const devoluciones = async () => {
+    const detalles = await DetalleDevolucion.findAll({
+        attributes: ['id_detalle_pedido', 'cantidad'],
+        include: [
+            { model: DevolucionPedido, attributes: ['id_pedido'], where: { estado: 'registrada' } },
+            { model: DetallePedido, attributes: ['precio_unitario'] }
+        ]
+    });
+    const porPedido = {}, porDetalle = {};
+    detalles.forEach(d => {
+        const id = d.DevolucionPedido.id_pedido;
+        porPedido[id] = redondear((porPedido[id] || 0) + Number(d.cantidad) * Number(d.DetallePedido.precio_unitario));
+        porDetalle[d.id_detalle_pedido] = redondear((porDetalle[d.id_detalle_pedido] || 0) + Number(d.cantidad));
+    });
+    return { porPedido, porDetalle };
+};
+
+// Prórroga más reciente (no anulada) de cada contrato: { id_contrato: tramite }
+const ultimaProrroga = async (ids) => {
+    if (!ids.length) return {};
+    const tramites = await TramiteContrato.findAll({
+        where: { id_contrato: ids, tipo: 'prorroga', estado: { [Op.ne]: 'anulado' } },
+        order: [['id_tramite', 'ASC']]
+    });
+    const mapa = {};
+    tramites.forEach(t => { mapa[t.id_contrato] = t; });
+    return mapa;
+};
+const textoProrroga = (t) => !t ? 'Sin prórroga'
+    : t.estado === 'solicitada' ? `Solicitada al ${formatoGT(t.fecha_hasta)}`
+        : t.estado === 'aprobada' ? `Aprobada al ${formatoGT(t.fecha_hasta)}` : `Rechazada (${formatoGT(t.fecha_resolucion)})`;
+
 const INFORMES = {
     // ---------- Contratos ----------
     'contratos-vigentes': {
@@ -62,9 +97,18 @@ const INFORMES = {
         parametros: ['dias'],
         generar: async (p, par) => {
             const dias = Number(p.dias) || par.DIAS_ALERTA_CONTRATO;
-            const filas = (await cargarConAvance({ estado: 'vigente' }))
-                .filter(c => c.dias_para_fin <= dias && c.tiene_saldo).map(filaContrato);
-            return { columnas: COLS_CONTRATO, filas, resumen: { [`Vencen en ${dias} días o menos`]: filas.length } };
+            const contratos = (await cargarConAvance({ estado: 'vigente' })).filter(c => c.dias_para_fin <= dias && c.tiene_saldo);
+            const prorrogas = await ultimaProrroga(contratos.map(c => c.id_contrato));
+            const filas = contratos.map(c => ({
+                ...filaContrato(c),
+                ultimo_dia_pedido: c.ultimo_dia_pedido,
+                tipo: c.contrato_abierto ? 'Abierto: el proveedor administra sus entregas' : 'La institución debe adquirir lo adjudicado',
+                prorroga: textoProrroga(prorrogas[c.id_contrato])
+            }));
+            return {
+                columnas: [...COLS_CONTRATO.filter(x => x.clave !== 'fecha_inicio'), col('ultimo_dia_pedido', 'Último día recomendado para pedir', 'fecha'), col('tipo', 'Obligación'), col('prorroga', 'Prórroga')],
+                filas, resumen: { [`Vencen en ${dias} días o menos`]: filas.length, 'Saldo por entregar': filas.reduce((s, f) => s + f.saldo, 0) }
+            };
         }
     },
     'avance-contratos': {
@@ -86,30 +130,64 @@ const INFORMES = {
             };
         }
     },
+    // Con el contrato vencido ya no se pueden hacer entregas (no hay presupuesto
+    // para pagar): si no se renueva, la institución compra por otra modalidad.
+    // En contrato abierto el saldo no obliga a la institución; en licitación,
+    // cotización, baja cuantía o compra directa debía adquirir lo adjudicado.
     'contratos-incumplidos': {
-        grupo: 'Contratos y ventas', titulo: 'Contratos vencidos con saldo pendiente', descripcion: 'Contratos cuyo plazo terminó sin entregar todo lo adjudicado.',
-        parametros: [],
-        generar: async () => {
-            const filas = (await cargarConAvance({ estado: 'vencido' })).filter(c => c.tiene_saldo).map(filaContrato);
-            return { columnas: COLS_CONTRATO, filas, resumen: { 'Contratos incumplidos': filas.length, 'Saldo sin entregar': filas.reduce((s, f) => s + f.saldo, 0) } };
+        grupo: 'Contratos y ventas', titulo: 'Contratos vencidos con saldo pendiente', descripcion: 'Contratos cuyo plazo terminó sin entregar todo lo adjudicado. Después del vencimiento ya no se puede entregar; el saldo solo se recupera con un contrato nuevo.',
+        parametros: ['id_institucion'],
+        generar: async (p) => {
+            const where = { estado: 'vencido', ...(p.id_institucion ? { id_institucion: p.id_institucion } : {}) };
+            const contratos = (await cargarConAvance(where)).filter(c => c.tiene_saldo);
+            const prorrogas = await ultimaProrroga(contratos.map(c => c.id_contrato));
+            const filas = contratos.map(c => {
+                const unidades = redondear(c.renglones.reduce((s, r) => s + Math.max(0, r.saldo_por_entregar), 0));
+                const prorroga = prorrogas[c.id_contrato];
+                return {
+                    numero_contrato: c.numero_contrato, nog: c.nog, institucion: c.Institucion?.nombre, modalidad: c.ModalidadCompra?.nombre,
+                    fecha_fin: c.fecha_fin, dias_vencido: Math.max(0, -c.dias_para_fin),
+                    monto_total: Number(c.monto_total), monto_entregado: c.monto_entregado,
+                    saldo: redondear(Number(c.monto_total) - c.monto_entregado), unidades, porcentaje_avance: c.porcentaje_avance,
+                    exigible: !c.contrato_abierto,
+                    obligacion: c.contrato_abierto ? 'No: contrato abierto, la institución no está obligada' : 'Sí: la institución debía adquirir lo adjudicado',
+                    prorroga: textoProrroga(prorroga),
+                    siguiente: prorroga?.estado === 'solicitada'
+                        ? 'Registrar la resolución de la prórroga'
+                        : 'Ya no se puede entregar. Cerrar en GUATECOMPRAS o negociar un contrato nuevo (la unidad compra por otra modalidad)'
+                };
+            });
+            return {
+                columnas: [col('numero_contrato', 'Contrato'), col('nog', 'NOG'), col('institucion', 'Institución'), col('modalidad', 'Modalidad'),
+                    col('fecha_fin', 'Venció', 'fecha'), col('dias_vencido', 'Días vencido', 'numero'), col('monto_total', 'Monto', 'moneda'),
+                    col('monto_entregado', 'Entregado', 'moneda'), col('saldo', 'Saldo', 'moneda'), col('unidades', 'Unidades sin entregar', 'numero'),
+                    col('porcentaje_avance', 'Avance', 'porcentaje'), col('obligacion', '¿Obligaba a la institución?'), col('prorroga', 'Prórroga'), col('siguiente', 'Qué sigue')],
+                filas,
+                resumen: {
+                    'Contratos vencidos con saldo': filas.length,
+                    'Saldo que la institución debía adquirir': redondear(filas.filter(f => f.exigible).reduce((s, f) => s + f.saldo, 0)),
+                    'Saldo de contratos abiertos': redondear(filas.filter(f => !f.exigible).reduce((s, f) => s + f.saldo, 0))
+                }
+            };
         }
     },
     'ventas-por-institucion': {
-        grupo: 'Contratos y ventas', titulo: 'Ventas por institución', descripcion: 'Pedidos entregados por institución en el período.',
+        grupo: 'Contratos y ventas', titulo: 'Ventas por institución', descripcion: 'Pedidos entregados por institución en el período, sin lo que la institución devolvió.',
         parametros: ['desde', 'hasta'],
         generar: async (p) => {
             const r = rango(p);
-            const pedidos = (await pedidosConContrato({ estado: 'entregado' })).filter(x => enRango(x.fecha_real_entrega, r));
+            const [pedidos, dev] = await Promise.all([pedidosConContrato({ estado: 'entregado' }), devoluciones()]);
             const grupos = {};
-            pedidos.forEach(x => {
+            pedidos.filter(x => enRango(x.fecha_real_entrega, r)).forEach(x => {
                 const n = x.Contrato.Institucion.nombre;
-                const g = grupos[n] || (grupos[n] = { institucion: n, pedidos: 0, contratos: new Set(), monto: 0 });
-                g.pedidos += 1; g.contratos.add(x.Contrato.numero_contrato); g.monto += Number(x.monto_total);
+                const g = grupos[n] || (grupos[n] = { institucion: n, pedidos: 0, contratos: new Set(), monto: 0, devuelto: 0 });
+                const devuelto = dev.porPedido[x.id_pedido] || 0;
+                g.pedidos += 1; g.contratos.add(x.Contrato.numero_contrato); g.monto += Number(x.monto_total) - devuelto; g.devuelto += devuelto;
             });
-            const filas = Object.values(grupos).map(g => ({ ...g, contratos: g.contratos.size, monto: redondear(g.monto) })).sort((a, b) => b.monto - a.monto);
+            const filas = Object.values(grupos).map(g => ({ ...g, contratos: g.contratos.size, monto: redondear(g.monto), devuelto: redondear(g.devuelto) })).sort((a, b) => b.monto - a.monto);
             return {
-                columnas: [col('institucion', 'Institución'), col('contratos', 'Contratos', 'numero'), col('pedidos', 'Pedidos entregados', 'numero'), col('monto', 'Monto', 'moneda')],
-                filas, resumen: { 'Total vendido': filas.reduce((s, f) => s + f.monto, 0) }
+                columnas: [col('institucion', 'Institución'), col('contratos', 'Contratos', 'numero'), col('pedidos', 'Pedidos entregados', 'numero'), col('devuelto', 'Devuelto', 'moneda'), col('monto', 'Monto neto', 'moneda')],
+                filas, resumen: { 'Total vendido': filas.reduce((s, f) => s + f.monto, 0), 'Total devuelto': filas.reduce((s, f) => s + f.devuelto, 0) }
             };
         }
     },
@@ -119,25 +197,29 @@ const INFORMES = {
         parametros: ['desde', 'hasta'],
         generar: async (p) => {
             const r = rango(p);
-            const [productos, detalles] = await Promise.all([
+            const [productos, detalles, dev] = await Promise.all([
                 Producto.findAll({ where: { activo: true }, attributes: ['id_producto', 'codigo', 'nombre', 'concentracion'] }),
                 DetallePedido.findAll({
                     include: [{ model: Pedido, attributes: ['fecha_real_entrega'], where: { estado: 'entregado', fecha_real_entrega: { [Op.between]: [r.desde, r.hasta] } }, include: [{ model: Contrato, attributes: ['id_institucion'] }] }]
-                })
+                }),
+                devoluciones()
             ]);
+            // Unidades que se quedaron en la institución (lo entregado menos lo devuelto)
+            const neto = (d) => Number(d.cantidad) - (dev.porDetalle[d.id_detalle_pedido] || 0);
             const filas = productos.map(x => {
                 const propios = detalles.filter(d => d.id_producto === x.id_producto && Number(d.cantidad) > 0);
                 return {
                     codigo: x.codigo, producto: `${x.nombre} ${x.concentracion || ''}`.trim(),
                     pedidos: new Set(propios.map(d => d.id_pedido)).size,
                     instituciones: new Set(propios.map(d => d.Pedido.Contrato.id_institucion)).size,
-                    cantidad: redondear(propios.reduce((s, d) => s + Number(d.cantidad), 0)),
-                    monto: redondear(propios.reduce((s, d) => s + Number(d.subtotal), 0))
+                    devuelto: redondear(propios.reduce((s, d) => s + (dev.porDetalle[d.id_detalle_pedido] || 0), 0)),
+                    cantidad: redondear(propios.reduce((s, d) => s + neto(d), 0)),
+                    monto: redondear(propios.reduce((s, d) => s + neto(d) * Number(d.precio_unitario), 0))
                 };
             }).sort((a, b) => b.monto - a.monto || a.producto.localeCompare(b.producto));
             return {
                 columnas: [col('codigo', 'Código'), col('producto', 'Producto'), col('pedidos', 'Pedidos', 'numero'), col('instituciones', 'Instituciones', 'numero'),
-                    col('cantidad', 'Unidades entregadas', 'numero'), col('monto', 'Monto', 'moneda')],
+                    col('cantidad', 'Unidades vendidas', 'numero'), col('devuelto', 'Unidades devueltas', 'numero'), col('monto', 'Monto', 'moneda')],
                 filas, resumen: { 'Total vendido': filas.reduce((s, f) => s + f.monto, 0), 'Productos sin venta': filas.filter(f => !f.cantidad).length }
             };
         }
@@ -157,20 +239,118 @@ const INFORMES = {
                 const c = cerrados.filter(x => x.id_modalidad === m.id_modalidad);
                 const cumplidos = c.filter(x => x.cumplido).length;
                 return {
-                    modalidad: m.nombre, entregados: e.entregados, a_tiempo: e.a_tiempo, tasa: e.tasa_a_tiempo, retraso_promedio: e.retraso_promedio,
-                    cerrados: c.length, cumplidos, tasa_contratos: c.length ? Math.round((cumplidos / c.length) * 100) : null
+                    modalidad: m.nombre, tipo: m.contrato_abierto ? 'Abierto' : 'Cantidad exacta',
+                    plazo: m.dias_habiles_entrega ? `${m.dias_habiles_entrega} días hábiles` : 'Según contrato',
+                    entregados: e.entregados, a_tiempo: e.a_tiempo, tasa: e.tasa_a_tiempo, retraso_promedio: e.retraso_promedio,
+                    cerrados: c.length, cumplidos, con_prorroga: c.filter(x => x.prorrogas_aprobadas > 0).length,
+                    tasa_contratos: c.length ? Math.round((cumplidos / c.length) * 100) : null
                 };
             }).filter(f => f.entregados || f.cerrados);
             return {
-                columnas: [col('modalidad', 'Modalidad'), col('entregados', 'Pedidos entregados', 'numero'), col('a_tiempo', 'A tiempo', 'numero'),
-                    col('tasa', 'Entregas a tiempo', 'porcentaje'), col('retraso_promedio', 'Retraso promedio (días)', 'numero'),
-                    col('cerrados', 'Contratos cerrados', 'numero'), col('cumplidos', 'Cerrados cumplidos', 'numero'), col('tasa_contratos', 'Contratos cumplidos', 'porcentaje')],
+                columnas: [col('modalidad', 'Modalidad'), col('tipo', 'Tipo'), col('plazo', 'Plazo de entrega'), col('entregados', 'Pedidos entregados', 'numero'), col('a_tiempo', 'A tiempo', 'numero'),
+                    col('tasa', 'Entregas a tiempo', 'porcentaje'), col('retraso_promedio', 'Retraso promedio (días hábiles)', 'numero'),
+                    col('cerrados', 'Contratos cerrados', 'numero'), col('con_prorroga', 'Cerrados con prórroga', 'numero'), col('cumplidos', 'Cerrados cumplidos', 'numero'), col('tasa_contratos', 'Contratos cumplidos', 'porcentaje')],
                 filas
             };
         }
     },
 
+    'tramites-contrato': {
+        grupo: 'Contratos y ventas', titulo: 'Prórrogas y notas técnicas', descripcion: 'Solicitudes de más plazo (prórrogas) y de compra por otra modalidad (notas técnicas de contrato abierto), con su causa y resolución.',
+        parametros: ['desde', 'hasta', 'id_institucion'],
+        generar: async (p) => {
+            const r = rango(p);
+            const tramites = await TramiteContrato.findAll({
+                where: { tipo: { [Op.in]: ['prorroga', 'nota_tecnica'] }, estado: { [Op.ne]: 'anulado' }, fecha_documento: { [Op.between]: [r.desde, r.hasta] } },
+                include: [
+                    { model: Contrato, attributes: ['numero_contrato', 'id_institucion'], ...(p.id_institucion ? { where: { id_institucion: p.id_institucion } } : {}), include: [{ model: Institucion, attributes: ['nombre'] }] },
+                    { model: DetalleContrato, attributes: ['numero_renglon'], include: [{ model: Producto, attributes: ['nombre'] }] }
+                ],
+                order: [['fecha_documento', 'ASC']]
+            });
+            const ESTADO = { solicitada: 'En trámite', aprobada: 'Aprobada', rechazada: 'Rechazada' };
+            const filas = tramites.map(t => ({
+                tipo: ETIQUETA_TRAMITE[t.tipo], numero: t.numero_documento, fecha: t.fecha_documento,
+                contrato: t.Contrato.numero_contrato, institucion: t.Contrato.Institucion?.nombre,
+                renglon: t.DetalleContrato ? `${t.DetalleContrato.numero_renglon}. ${t.DetalleContrato.Producto?.nombre}` : 'Todo el contrato',
+                causa: CAUSAS_PRORROGA[t.causa] || t.causa,
+                periodo: t.tipo === 'prorroga' ? `Fin ${formatoGT(t.fecha_fin_anterior)} → ${formatoGT(t.fecha_hasta)}` : `${formatoGT(t.fecha_desde)} al ${formatoGT(t.fecha_hasta)}`,
+                estado: ESTADO[t.estado] || t.estado, resolucion: t.observacion_resolucion || ''
+            }));
+            return {
+                columnas: [col('tipo', 'Trámite'), col('numero', 'Documento'), col('fecha', 'Solicitada', 'fecha'), col('contrato', 'Contrato'), col('institucion', 'Institución'),
+                    col('renglon', 'Renglón'), col('causa', 'Causa'), col('periodo', 'Plazo'), col('estado', 'Estado'), col('resolucion', 'Resolución')],
+                filas,
+                resumen: { 'Prórrogas': filas.filter(f => f.tipo === 'Prórroga').length, 'Notas técnicas': filas.filter(f => f.tipo === 'Nota técnica').length, 'En trámite': filas.filter(f => f.estado === 'En trámite').length }
+            };
+        }
+    },
+    'oficios-advertencia': {
+        grupo: 'Contratos y ventas', titulo: 'Oficios de advertencia por institución', descripcion: 'Oficios que cada institución nos ha enviado por atrasos o incumplimientos. Después del límite (3) puede dejar de comprarnos, salvo en contrato abierto.',
+        parametros: ['id_institucion'],
+        generar: async (p, par) => {
+            const oficios = await TramiteContrato.findAll({
+                where: { tipo: 'oficio', estado: 'registrado' },
+                include: [{
+                    model: Contrato, attributes: ['numero_contrato', 'id_institucion'], ...(p.id_institucion ? { where: { id_institucion: p.id_institucion } } : {}),
+                    include: [{ model: Institucion, attributes: ['nombre'] }, { model: ModalidadCompra, attributes: ['contrato_abierto'] }]
+                }, { model: Pedido, attributes: ['numero_pedido'] }],
+                order: [['fecha_documento', 'ASC']]
+            });
+            const grupos = {};
+            oficios.forEach(o => {
+                const n = o.Contrato.Institucion?.nombre || '—';
+                const g = grupos[n] || (grupos[n] = { institucion: n, cuentan: 0, abiertos: 0, ultimo: null, detalle: [] });
+                o.Contrato.ModalidadCompra?.contrato_abierto ? (g.abiertos += 1) : (g.cuentan += 1);
+                if (!g.ultimo || o.fecha_documento > g.ultimo) g.ultimo = o.fecha_documento;
+                g.detalle.push(`${o.numero_documento} (${CAUSAS_OFICIO[o.causa] || o.causa}${o.Pedido ? `, ${o.Pedido.numero_pedido}` : ''})`);
+            });
+            const filas = Object.values(grupos).map(g => ({
+                ...g, detalle: g.detalle.join('; '),
+                situacion: g.cuentan >= par.LIMITE_OFICIOS ? 'Puede dejar de comprarnos' : g.cuentan === par.LIMITE_OFICIOS - 1 ? 'Un oficio más y puede dejar de comprarnos' : 'Normal'
+            })).sort((a, b) => b.cuentan - a.cuentan);
+            return {
+                columnas: [col('institucion', 'Institución'), col('cuentan', `Oficios (límite ${par.LIMITE_OFICIOS})`, 'numero'), col('abiertos', 'En contrato abierto (no cuentan)', 'numero'),
+                    col('ultimo', 'Último oficio', 'fecha'), col('situacion', 'Situación'), col('detalle', 'Oficios')],
+                filas, resumen: { 'Instituciones en riesgo': filas.filter(f => f.cuentan >= par.LIMITE_OFICIOS - 1).length }
+            };
+        }
+    },
+
     // ---------- Pedidos y entregas ----------
+    'devoluciones': {
+        grupo: 'Pedidos y entregas', titulo: 'Devoluciones de instituciones', descripcion: 'Producto que las instituciones devolvieron, de qué lote y pedido, y por qué.',
+        parametros: ['desde', 'hasta', 'id_institucion'],
+        generar: async (p) => {
+            const r = rango(p);
+            const detalles = await DetalleDevolucion.findAll({
+                include: [
+                    {
+                        model: DevolucionPedido, where: { estado: 'registrada', fecha_devolucion: { [Op.between]: [r.desde, r.hasta] } },
+                        include: [{ model: Pedido, attributes: ['numero_pedido'], include: [{ model: Contrato, attributes: ['numero_contrato', 'id_institucion'], include: [{ model: Institucion, attributes: ['nombre'] }] }] }]
+                    },
+                    { model: Lote, attributes: ['numero_lote', 'fecha_vencimiento', 'condicion'], include: [{ model: Producto, attributes: ['nombre'] }] },
+                    { model: DetallePedido, attributes: ['precio_unitario'] }
+                ],
+                order: [[DevolucionPedido, 'fecha_devolucion', 'ASC']]
+            });
+            const filas = detalles
+                .filter(d => !p.id_institucion || String(d.DevolucionPedido.Pedido.Contrato.id_institucion) === String(p.id_institucion))
+                .map(d => ({
+                    fecha: d.DevolucionPedido.fecha_devolucion, institucion: d.DevolucionPedido.Pedido.Contrato.Institucion?.nombre,
+                    numero_pedido: d.DevolucionPedido.Pedido.numero_pedido, producto: d.Lote.Producto?.nombre, numero_lote: d.Lote.numero_lote,
+                    vence: d.Lote.fecha_vencimiento, causa: CAUSAS_DEVOLUCION[d.DevolucionPedido.causa] || d.DevolucionPedido.causa,
+                    documento: d.DevolucionPedido.documento || '', cantidad: Number(d.cantidad),
+                    monto: redondear(Number(d.cantidad) * Number(d.DetallePedido.precio_unitario)), condicion: ESTADO_LOTE[d.Lote.condicion]
+                }));
+            return {
+                columnas: [col('fecha', 'Fecha', 'fecha'), col('institucion', 'Institución'), col('numero_pedido', 'Pedido'), col('producto', 'Producto'),
+                    col('numero_lote', 'Lote'), col('vence', 'Vence', 'fecha'), col('causa', 'Causa'), col('documento', 'Acta'),
+                    col('cantidad', 'Unidades', 'numero'), col('monto', 'Monto', 'moneda'), col('condicion', 'Lote hoy')],
+                filas, resumen: { 'Unidades devueltas': filas.reduce((s, f) => s + f.cantidad, 0), 'Monto devuelto': filas.reduce((s, f) => s + f.monto, 0) }
+            };
+        }
+    },
     'entregas-proximas': {
         grupo: 'Pedidos y entregas', titulo: 'Entregas próximas sin despachar', descripcion: 'Pedidos que siguen en bodega y cuya fecha programada llega en los próximos días.',
         parametros: ['dias', 'id_institucion'],
@@ -204,7 +384,7 @@ const INFORMES = {
             return {
                 columnas: [col('numero_pedido', 'Pedido'), col('institucion', 'Institución'), col('numero_contrato', 'Contrato'),
                     col('fecha_programada', 'Programada', 'fecha'), col('fecha_real_entrega', 'Entregado', 'fecha'),
-                    col('dias_retraso', 'Días de retraso', 'numero'), col('monto', 'Monto', 'moneda')],
+                    col('dias_retraso', 'Días hábiles de retraso', 'numero'), col('monto', 'Monto', 'moneda')],
                 filas, resumen: { 'Pedidos entregados': filas.length, 'A tiempo': filas.filter(f => f.dias_retraso === 0).length }
             };
         }
@@ -217,11 +397,13 @@ const INFORMES = {
                 .filter(x => !p.id_institucion || String(x.Contrato.id_institucion) === String(p.id_institucion))
                 .map(x => ({
                     numero_pedido: x.numero_pedido, institucion: x.Contrato.Institucion.nombre, numero_contrato: x.Contrato.numero_contrato,
-                    estado: ETIQUETAS[x.estado], fecha_programada: x.fecha_programada, dias_retraso: calcularRetraso(x), monto: Number(x.monto_total)
+                    estado: ETIQUETAS[x.estado], fecha_programada: x.fecha_programada, fecha_compromiso: x.fecha_compromiso,
+                    dias_retraso: calcularRetraso(x), monto: Number(x.monto_total)
                 }));
             return {
                 columnas: [col('numero_pedido', 'Pedido'), col('institucion', 'Institución'), col('numero_contrato', 'Contrato'), col('estado', 'Estado'),
-                    col('fecha_programada', 'Programada', 'fecha'), col('dias_retraso', 'Días de retraso', 'numero'), col('monto', 'Monto', 'moneda')],
+                    col('fecha_programada', 'Programada', 'fecha'), col('fecha_compromiso', 'Carta de compromiso', 'fecha'),
+                    col('dias_retraso', 'Días hábiles de retraso', 'numero'), col('monto', 'Monto', 'moneda')],
                 filas, resumen: { 'Pendientes': filas.length, 'Retrasados': filas.filter(f => f.dias_retraso > 0).length }
             };
         }
@@ -244,7 +426,7 @@ const INFORMES = {
             }));
             return {
                 columnas: [col('institucion', 'Institución'), col('entregados', 'Entregados', 'numero'), col('a_tiempo', 'A tiempo', 'numero'),
-                    col('retrasados', 'Con retraso', 'numero'), col('porcentaje', 'Cumplimiento', 'porcentaje'), col('retraso_promedio', 'Retraso promedio (días)', 'numero')],
+                    col('retrasados', 'Con retraso', 'numero'), col('porcentaje', 'Cumplimiento', 'porcentaje'), col('retraso_promedio', 'Retraso promedio (días hábiles)', 'numero')],
                 filas
             };
         }
@@ -642,7 +824,7 @@ const INFORMES = {
                 const datos = a.datos_antes || {};
                 return {
                     fecha: a.fecha.toISOString(), tabla: TABLAS[a.tabla] || a.tabla,
-                    registro: datos.numero_pedido || datos.numero_contrato || datos.numero_lote || datos.nombre || datos.nombre_archivo || (datos.numero_factura ? `${datos.serie_factura}-${datos.numero_factura}` : a.id_registro),
+                    registro: datos.numero_pedido || datos.numero_contrato || datos.numero_lote || datos.numero_documento || datos.nombre || datos.nombre_archivo || (datos.numero_factura ? `${datos.serie_factura}-${datos.numero_factura}` : a.id_registro),
                     usuario: a.Usuario ? `${a.Usuario.nombre} ${a.Usuario.apellido}` : 'Sistema', motivo: a.motivo || '',
                     restaurado: restaurado ? `Sí, ${restaurado.fecha.toISOString().slice(0, 10)}` : 'No'
                 };
@@ -658,7 +840,8 @@ const INFORMES = {
 
 const TABLAS = {
     productos: 'Productos', lotes: 'Lotes', ingresos: 'Ingresos de compra', contratos: 'Contratos', pedidos: 'Pedidos',
-    instituciones: 'Instituciones', usuarios: 'Usuarios', proveedores: 'Proveedores', laboratorios: 'Laboratorios'
+    instituciones: 'Instituciones', usuarios: 'Usuarios', proveedores: 'Proveedores', laboratorios: 'Laboratorios',
+    tramites_contrato: 'Trámites de contrato', devoluciones_pedido: 'Devoluciones'
 };
 
 // La pregunta concreta que contesta cada informe (documento "Casos y lo que falta", sección 6)
@@ -670,6 +853,9 @@ const PREGUNTAS = {
     'ventas-por-institucion': '¿Qué institución me compra más?',
     'ventas-por-producto': '¿Qué producto rota más y cuál se estanca?',
     'cumplimiento-modalidad': '¿En qué tipo de contrato me atraso más?',
+    'tramites-contrato': '¿Qué prórrogas y notas técnicas pedí, por qué y qué resolvieron?',
+    'oficios-advertencia': '¿Qué institución me ha advertido y está por dejar de comprarme?',
+    'devoluciones': '¿Qué me devolvieron, de qué lote y por qué?',
     'entregas-proximas': '¿Qué tengo que despachar en los próximos días para no atrasarme?',
     'pedidos-entregados': '¿Qué se entregó en el período y a quién?',
     'pedidos-pendientes': '¿Qué estoy debiendo y con cuántos días de atraso?',

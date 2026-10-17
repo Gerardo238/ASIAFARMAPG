@@ -11,6 +11,8 @@ const DetallePedido = require('./DetallePedido');
 const Auditoria = require('./Auditoria');
 const Adjunto = require('./Adjunto');
 const { AsignacionLote, SeguimientoPedido } = require('./Despacho');
+const TramiteContrato = require('./TramiteContrato');
+const { DevolucionPedido, DetalleDevolucion } = require('./Devolucion');
 const {
     Ubicacion, FormaFarmaceutica, UnidadMedida, TipoInstitucion, ModalidadCompra,
     MotivoMovimiento, Laboratorio, Proveedor, Parametro
@@ -84,6 +86,31 @@ SeguimientoPedido.belongsTo(Pedido, { foreignKey: 'id_pedido' });
 Usuario.hasMany(SeguimientoPedido, { foreignKey: 'id_usuario' });
 SeguimientoPedido.belongsTo(Usuario, { foreignKey: 'id_usuario' });
 
+// ---------- Trámites del contrato (prórrogas, notas técnicas, oficios) ----------
+Contrato.hasMany(TramiteContrato, { foreignKey: 'id_contrato' });
+TramiteContrato.belongsTo(Contrato, { foreignKey: 'id_contrato' });
+DetalleContrato.hasMany(TramiteContrato, { foreignKey: 'id_detalle_contrato' });
+TramiteContrato.belongsTo(DetalleContrato, { foreignKey: 'id_detalle_contrato' });
+Pedido.hasMany(TramiteContrato, { foreignKey: 'id_pedido' });
+TramiteContrato.belongsTo(Pedido, { foreignKey: 'id_pedido' });
+Usuario.hasMany(TramiteContrato, { foreignKey: 'id_usuario' });
+TramiteContrato.belongsTo(Usuario, { foreignKey: 'id_usuario' });
+TramiteContrato.belongsTo(Usuario, { foreignKey: 'id_usuario_resolucion', as: 'Resolvio' });
+
+// ---------- Devoluciones de instituciones ----------
+Pedido.hasMany(DevolucionPedido, { foreignKey: 'id_pedido' });
+DevolucionPedido.belongsTo(Pedido, { foreignKey: 'id_pedido' });
+Usuario.hasMany(DevolucionPedido, { foreignKey: 'id_usuario' });
+DevolucionPedido.belongsTo(Usuario, { foreignKey: 'id_usuario' });
+DevolucionPedido.hasMany(DetalleDevolucion, { foreignKey: 'id_devolucion' });
+DetalleDevolucion.belongsTo(DevolucionPedido, { foreignKey: 'id_devolucion' });
+AsignacionLote.hasMany(DetalleDevolucion, { foreignKey: 'id_asignacion' });
+DetalleDevolucion.belongsTo(AsignacionLote, { foreignKey: 'id_asignacion' });
+DetallePedido.hasMany(DetalleDevolucion, { foreignKey: 'id_detalle_pedido' });
+DetalleDevolucion.belongsTo(DetallePedido, { foreignKey: 'id_detalle_pedido' });
+Lote.hasMany(DetalleDevolucion, { foreignKey: 'id_lote' });
+DetalleDevolucion.belongsTo(Lote, { foreignKey: 'id_lote' });
+
 // ---------- Auditoría ----------
 Usuario.hasMany(Auditoria, { foreignKey: 'id_usuario' });
 Auditoria.belongsTo(Usuario, { foreignKey: 'id_usuario' });
@@ -93,6 +120,6 @@ Adjunto.belongsTo(Usuario, { foreignKey: 'id_usuario' });
 module.exports = {
     Usuario, Institucion, Producto, Ingreso, Lote, Movimiento,
     Contrato, DetalleContrato, Pedido, DetallePedido, AsignacionLote, SeguimientoPedido,
-    Auditoria, Adjunto, Ubicacion, FormaFarmaceutica, UnidadMedida, TipoInstitucion, ModalidadCompra,
+    TramiteContrato, DevolucionPedido, DetalleDevolucion, Auditoria, Adjunto, Ubicacion, FormaFarmaceutica, UnidadMedida, TipoInstitucion, ModalidadCompra,
     MotivoMovimiento, Laboratorio, Proveedor, Parametro
 };

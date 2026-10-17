@@ -112,6 +112,25 @@ const proponerFEFO = async ({ id_producto, cantidad, vigenciaMinimaMeses, transa
     return { asignaciones, faltante: pendiente > 0 ? pendiente : 0, excluidos, fechaMinima };
 };
 
+// Existencia que se podría despachar hoy de cada producto con la vida útil
+// mínima indicada: lotes disponibles, sin vencer y que cumplen el mínimo.
+// Devuelve { id_producto: cantidad }.
+const existenciaApta = async ({ ids_producto, vigenciaMinimaMeses, transaction }) => {
+    const fechaMinima = sumarMeses(hoy(), vigenciaMinimaMeses);
+    const lotes = await Lote.findAll({
+        where: {
+            id_producto: ids_producto, condicion: 'disponible',
+            cantidad_disponible: { [Op.gt]: 0 },
+            fecha_vencimiento: { [Op.gt]: hoy(), [Op.gte]: fechaMinima }
+        },
+        attributes: ['id_producto', 'cantidad_disponible'],
+        transaction
+    });
+    const apta = {};
+    lotes.forEach(l => { apta[l.id_producto] = redondear((apta[l.id_producto] || 0) + Number(l.cantidad_disponible)); });
+    return apta;
+};
+
 // ---------- Semáforo de vencimiento ----------
 const semaforo = (fecha_vencimiento, parametros) => {
     const dias = diasEntre(hoy(), fecha_vencimiento);
@@ -121,4 +140,4 @@ const semaforo = (fecha_vencimiento, parametros) => {
     return { dias, color: 'verde' };
 };
 
-module.exports = { validarFechasLote, registrarMovimiento, proponerFEFO, obtenerMotivo, semaforo, redondear };
+module.exports = { validarFechasLote, registrarMovimiento, proponerFEFO, existenciaApta, obtenerMotivo, semaforo, redondear };

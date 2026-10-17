@@ -9,11 +9,12 @@
 // inventario (services/inventario.js), así el kárdex y los saldos cuadran.
 // Las fechas son relativas a hoy. Solo se ejecuta una vez.
 // Uso: npm run seed:historial
-require('dotenv').config({ quiet: true });
+require('../config/entorno');
 const bcrypt = require('bcryptjs');
 const sequelize = require('../config/database');
 const M = require('../models/index');
 const { sembrarCatalogos } = require('./catalogos');
+const { aplicarMigraciones } = require('../config/migraciones');
 const { crearAdmin } = require('./createAdmin');
 const { registrarMovimiento, obtenerMotivo, redondear } = require('../services/inventario');
 const { aPlano } = require('../utils/auditoria');
@@ -28,6 +29,7 @@ const MARCA = 'HR-LP-007-2026';
     try {
         await sequelize.authenticate();
         await sequelize.sync();
+        await aplicarMigraciones();
         await sembrarCatalogos();
         const admin = await crearAdmin();
         if (await M.Contrato.findOne({ where: { numero_contrato: MARCA } })) {

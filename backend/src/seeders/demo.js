@@ -2,7 +2,7 @@
 // corriendo), para probar el flujo completo: compras con lotes de distintos
 // laboratorios, contrato de GUATECOMPRAS y un pedido que se despacha por FEFO.
 // Uso: npm run seed:demo
-require('dotenv').config();
+require('../config/entorno');
 const { hoy, sumarMeses, sumarDias } = require('../utils/fechas');
 
 const API = `http://localhost:${process.env.PORT}/api`;

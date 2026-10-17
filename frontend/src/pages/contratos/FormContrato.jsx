@@ -32,13 +32,21 @@ const FormContrato = ({ contrato, alCerrar, alGuardar }) => {
     const cambiarRenglon = (i, k, v) => setForm({ ...form, renglones: form.renglones.map((r, j) => j === i ? { ...r, [k]: v } : r) });
     const total = form.renglones.reduce((s, r) => s + (Number(r.cantidad_contratada) || 0) * (Number(r.precio_unitario) || 0), 0);
 
+    // Rango de monto y plazo de la modalidad elegida (Ley de Contrataciones del Estado)
+    const modalidad = modalidades.find(m => String(m.id_modalidad) === String(form.id_modalidad));
+    const min = modalidad?.monto_minimo != null ? Number(modalidad.monto_minimo) : null;
+    const max = modalidad?.monto_maximo != null ? Number(modalidad.monto_maximo) : null;
+    const fueraDeRango = modalidad && total > 0 && ((min !== null && total < min) || (max !== null && total > max));
+    const rango = modalidad && (min !== null || max !== null)
+        ? (min !== null && max !== null ? `de ${moneda(min)} a ${moneda(max)}` : min !== null ? `desde ${moneda(min)}` : `hasta ${moneda(max)}`)
+        : null;
+
     const guardar = async (e) => {
         e.preventDefault();
         setError('');
         try {
-            if (contrato) await api.put(`/contratos/${contrato.id_contrato}`, form);
-            else await api.post('/contratos', form);
-            alGuardar();
+            const r = contrato ? await api.put(`/contratos/${contrato.id_contrato}`, form) : await api.post('/contratos', form);
+            alGuardar(r.data.advertencia);
         } catch (err) { setError(mensajeError(err)); }
     };
 
@@ -53,7 +61,12 @@ const FormContrato = ({ contrato, alCerrar, alGuardar }) => {
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
                     <Campo etiqueta="NOG" obligatorio ayuda="Número de Operación Guatecompras"><Entrada required inputMode="numeric" {...campo('nog')} /></Campo>
                     <Campo etiqueta="No. de contrato" obligatorio><Entrada required {...campo('numero_contrato')} /></Campo>
-                    <Campo etiqueta="Modalidad de compra" obligatorio className="md:col-span-2">
+                    <Campo etiqueta="Modalidad de compra" obligatorio className="md:col-span-2"
+                        ayuda={modalidad ? [
+                            rango && `Monto ${rango}.`,
+                            modalidad.contrato_abierto ? 'Contrato abierto: el proveedor administra sus entregas; la institución no está obligada a comprar todo.' : 'La institución debe adquirir la cantidad adjudicada.',
+                            modalidad.dias_habiles_entrega ? `Entrega de órdenes en ${modalidad.dias_habiles_entrega} días hábiles.` : null
+                        ].filter(Boolean).join(' ') : undefined}>
                         <Selector vacio="Seleccionar" required {...campo('id_modalidad')} opciones={modalidades.map(m => ({ value: m.id_modalidad, label: m.nombre }))} />
                     </Campo>
                     <Campo etiqueta="Institución" obligatorio className="md:col-span-2">
@@ -91,6 +104,11 @@ const FormContrato = ({ contrato, alCerrar, alGuardar }) => {
                 </div>
                 <Boton variante="secundario" icono={Plus} className="mt-3" onClick={() => setForm({ ...form, renglones: [...form.renglones, { ...RENGLON_VACIO }] })}>Agregar renglón</Boton>
 
+                {fueraDeRango && (
+                    <Aviso tono="amarillo" className="mt-4">
+                        El monto total ({moneda(total)}) no corresponde a {modalidad.nombre} ({rango}). Revisa la modalidad; se puede guardar si el contrato es solo una parte del evento.
+                    </Aviso>
+                )}
                 {contrato && (
                     <Campo etiqueta="Motivo de la modificación" obligatorio className="mt-4">
                         <AreaTexto required {...campo('motivo')} placeholder="Ej. Ampliación según adenda No. 1" />

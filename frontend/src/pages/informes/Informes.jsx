@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { FileBarChart, Play, FileDown, Sheet, HelpCircle } from 'lucide-react';
 import jsPDF from 'jspdf';
@@ -55,6 +55,11 @@ const Informes = () => {
     const [resultado, setResultado] = useState(null);
     const [error, setError] = useState('');
     const [generando, setGenerando] = useState(false);
+    // El informe elegido y su resultado se muestran arriba a la derecha; si la
+    // lista se recorrió hacia abajo, hay que regresar la vista hasta ellos
+    const panelInforme = useRef(null);
+    const panelResultado = useRef(null);
+    const mostrarArriba = (ref) => requestAnimationFrame(() => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 
     useEffect(() => { api.get('/auth/usuarios').then(r => setUsuarios(r.data)).catch(() => setUsuarios([])); }, []);
 
@@ -69,12 +74,12 @@ const Informes = () => {
         id_usuario: usuarios.map(u => ({ value: u.id_usuario, label: `${u.nombre} ${u.apellido}` }))
     };
 
-    const seleccionar = (k) => { setUrl({ informe: k }); setResultado(null); setError(''); };
+    const seleccionar = (k) => { setUrl({ informe: k }); setResultado(null); setError(''); mostrarArriba(panelInforme); };
 
     const generar = async () => {
         setGenerando(true); setError('');
         const consulta = Object.fromEntries((informe.parametros || []).filter(p => params[p]).map(p => [p, params[p]]));
-        try { setResultado((await api.get(`/informes/${clave}`, { params: consulta })).data); }
+        try { setResultado((await api.get(`/informes/${clave}`, { params: consulta })).data); mostrarArriba(panelResultado); }
         catch (err) { setError(mensajeError(err)); }
         finally { setGenerando(false); }
     };
@@ -156,7 +161,7 @@ const Informes = () => {
                     ))}
                 </div>
 
-                <div className="lg:col-span-3">
+                <div className="lg:col-span-3 scroll-mt-6" ref={panelInforme}>
                     {!informe ? (
                         <Aviso>Elige en la lista la pregunta que necesitas responder; cada informe se puede exportar a PDF o Excel.</Aviso>
                     ) : (
@@ -182,6 +187,7 @@ const Informes = () => {
                                 {error && <Aviso tono="rojo" className="mt-4">{error}</Aviso>}
                             </Tarjeta>
 
+                            <div ref={panelResultado} className="scroll-mt-6" />
                             {resultado && (
                                 <Tarjeta titulo={`${resultado.filas.length} registro(s)`}
                                     acciones={<>

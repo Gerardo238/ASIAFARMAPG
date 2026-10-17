@@ -1,6 +1,9 @@
 import api from '../services/api';
 
-export const TIPOS_DOCUMENTO = ['Factura', 'Certificado de análisis', 'Registro sanitario', 'Ficha técnica', 'Acta o constancia', 'Otro'];
+export const TIPOS_DOCUMENTO = [
+    'Factura', 'Certificado de análisis', 'Registro sanitario', 'Ficha técnica', 'Acta o constancia',
+    'Contrato', 'Solicitud de prórroga', 'Resolución', 'Oficio', 'Nota técnica', 'Carta de compromiso', 'Acta de devolución', 'Otro'
+];
 export const ACEPTA = 'image/jpeg,image/png,image/webp,application/pdf';
 const MAXIMO = 10 * 1024 * 1024;
 

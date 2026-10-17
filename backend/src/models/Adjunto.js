@@ -2,10 +2,11 @@ const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
 // Documentos adjuntos (foto o PDF de la factura, registro sanitario, ficha
-// técnica...) de un ingreso de compra, un lote o un producto. El archivo se
-// guarda en la base de datos para que el respaldo (pg_dump) lo incluya.
-// No se borra: se anula, como todo lo demás.
-const ENTIDADES_ADJUNTO = ['ingresos', 'lotes', 'productos'];
+// técnica...) de un ingreso de compra, un lote o un producto; el contrato y
+// sus prórrogas u oficios; el acta de entrega o de devolución de un pedido.
+// El archivo se guarda en la base de datos para que el respaldo (pg_dump) lo
+// incluya. No se borra: se anula, como todo lo demás.
+const ENTIDADES_ADJUNTO = ['ingresos', 'lotes', 'productos', 'contratos', 'pedidos'];
 
 const Adjunto = sequelize.define('Adjunto', {
     id_adjunto: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },

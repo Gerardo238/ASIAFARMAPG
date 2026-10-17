@@ -1,4 +1,4 @@
-# Cómo cumple el sistema el documento "Casos y lo que falta"
+﻿# Cómo cumple el sistema el documento "Casos y lo que falta"
 
 Relación entre lo que pide el documento (casos, reglas, informes, conclusiones y recomendaciones) y dónde se resuelve en el sistema. Estado al 14/10/2026.
 
@@ -34,13 +34,27 @@ El panel de control tiene la tarjeta "Respuestas en un minuto" con un acceso dir
 | Objetivo 3, fecha programada contra fecha real | Días de retraso por pedido; clasificación a tiempo / con retraso / pendiente; indicadores en el panel. |
 | Recomendación: lector de código de barras | El buscador del panel acepta la lectura del lector (escribe el número y Enter) y abre la trazabilidad del lote. |
 | Recomendación: revisión diaria de vencimientos | El panel muestra al bodeguero "Lo que tienes pendiente", con lotes en alerta y lotes sin destino. |
-| Recomendación: métricas de cumplimiento | Panel: % de entregas a tiempo, retraso promedio y % de contratos cerrados cumplidos (últimos 12 meses). Informes *Cumplimiento de entregas por institución* y *Cumplimiento por tipo de contrato*. |
+| Recomendación: métricas de cumplimiento | Panel: % de entregas a tiempo, retraso promedio y % de contratos cerrados cumplidos (últimos 12 meses). Informes *Cumplimiento de entregas por institución* y *Cumplimiento por tipo de contrato*; después de la entrevista de contratos: *Prórrogas y notas técnicas*, *Oficios de advertencia por institución* y *Devoluciones de instituciones*. |
 | Recomendación: alerta preventiva de 5 días | Parámetro `DIAS_ALERTA_PEDIDO` (5 por defecto): pedidos que siguen en bodega y se entregan en 5 días o menos aparecen en el panel, en la lista de pedidos y en el informe *Entregas próximas sin despachar*. |
 | Recomendación: integración con MSPAS / otras sucursales | Fase futura, fuera del alcance actual. |
 
-## Informes (27)
+## Informes (30)
 
-Cada informe muestra la pregunta que contesta. Los 19 del documento están cubiertos; se agregaron *Ventas por producto*, *Existencias por lote*, *Existencias por casa farmacéutica*, *Lotes por vencer sin destino*, *Lotes vencidos y dados de baja*, *Instituciones que recibieron un lote*, *Registros anulados*, *Entregas próximas sin despachar* y *Cumplimiento por tipo de contrato*.
+Cada informe muestra la pregunta que contesta. Los 19 del documento están cubiertos; se agregaron *Ventas por producto*, *Existencias por lote*, *Existencias por casa farmacéutica*, *Lotes por vencer sin destino*, *Lotes vencidos y dados de baja*, *Instituciones que recibieron un lote*, *Registros anulados*, *Entregas próximas sin despachar* y *Cumplimiento por tipo de contrato*; después de la entrevista de contratos: *Prórrogas y notas técnicas*, *Oficios de advertencia por institución* y *Devoluciones de instituciones*.
+
+## Documento "Cosas por mejorar" (pruebas del 15 y 16/10/2026)
+
+| Caso | Cómo se resolvió |
+|---|---|
+| Al elegir un informe que está abajo en la lista, la pantalla no regresaba | Al elegir un informe la vista sube hasta él, y al generarlo baja hasta el resultado. |
+| La institución devolvió los 400 de un pedido: el kárdex lo mostraba, pero el pedido seguía como entregado y no se sabía de qué lote ni de qué pedido venía | La devolución ya no es un ajuste manual: se registra desde el pedido entregado (**Registrar devolución**), lote por lote, con causa y acta. El producto regresa al lote del que salió, el movimiento del kárdex queda ligado al pedido, el pedido muestra *Devolución parcial* o *Devuelto completo* y la cantidad vuelve al saldo del contrato. Se puede poner el lote en cuarentena para revisarlo. |
+| ¿Y si la devolución fue por error? | El administrador **anula la devolución**: el producto vuelve a salir del lote y cuenta otra vez como entregado. |
+| Contrato vencido con saldo (baja cuantía) | El informe muestra días vencido en positivo, unidades sin entregar, si el saldo obligaba a la institución, la prórroga y qué sigue (ya no se puede entregar). Ver `entrevista-gestion-contratos.md`. |
+| Con 10,000 disponibles se pudieron pedir 10,500 en dos pedidos | Al crear un pedido no se puede pedir más de la existencia apta (con la vida útil del contrato) menos lo ya comprometido en otros pedidos pendientes. El formulario muestra *Disponible en bodega* por renglón. |
+
+## Entrevista sobre la gestión de contratos
+
+Prórrogas, notas técnicas, oficios de advertencia, carta de compromiso, días hábiles, rango de monto y plazo de entrega por modalidad: ver `entrevista-gestion-contratos.md`.
 
 ## Pendiente de decidir
 

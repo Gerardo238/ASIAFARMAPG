@@ -1,18 +1,21 @@
 // Panel de control: lo que cada persona tiene que atender hoy, indicadores,
 // alertas (vencimientos, entregas, contratos) y actividad reciente.
 const { Op } = require('sequelize');
-const { Producto, Lote, Contrato, Pedido, Ingreso, Institucion, Laboratorio, Auditoria, Usuario } = require('../models/index');
+const { Producto, Lote, Contrato, Pedido, Ingreso, Institucion, Laboratorio, Auditoria, Usuario, TramiteContrato, ModalidadCompra, DetalleContrato } = require('../models/index');
 const { manejarError } = require('../utils/errores');
 const { obtenerParametros } = require('../services/parametros');
 const { semaforo, redondear } = require('../services/inventario');
-const { calcularRetraso, esEntregaProxima, lotesSinDestino, indicadoresCumplimiento } = require('../services/analisis');
+const { calcularRetraso, fechaLimite, esEntregaProxima, lotesSinDestino, indicadoresCumplimiento } = require('../services/analisis');
 const { resumirLotes } = require('./productoController');
 const { cargarConAvance } = require('./contratoController');
 const { ETIQUETAS } = require('./pedidoController');
 const { hoy, diasEntre, sumarMeses, sumarDias } = require('../utils/fechas');
 
 const NOMBRES_MES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-const TABLAS = { productos: 'producto', lotes: 'lote', ingresos: 'ingreso', contratos: 'contrato', pedidos: 'pedido', instituciones: 'institución', usuarios: 'usuario', parametros: 'parámetro' };
+const TABLAS = {
+    productos: 'producto', lotes: 'lote', ingresos: 'ingreso', contratos: 'contrato', pedidos: 'pedido', instituciones: 'institución',
+    usuarios: 'usuario', parametros: 'parámetro', tramites_contrato: 'trámite', devoluciones_pedido: 'devolución'
+};
 
 // Texto corto para la bitácora reciente del panel ("Ana López entregó PED-2026-00010")
 const describirCambio = (a) => {
@@ -24,15 +27,58 @@ const describirCambio = (a) => {
 const resumenPedido = (p) => ({
     id_pedido: p.id_pedido, numero_pedido: p.numero_pedido, institucion: p.Contrato?.Institucion?.nombre,
     numero_contrato: p.Contrato?.numero_contrato, fecha_programada: p.fecha_programada, estado: p.estado,
-    estado_texto: ETIQUETAS[p.estado], dias_retraso: calcularRetraso(p), dias_para_entrega: diasEntre(hoy(), p.fecha_programada)
+    estado_texto: ETIQUETAS[p.estado], dias_retraso: calcularRetraso(p), dias_para_entrega: diasEntre(hoy(), fechaLimite(p))
 });
+
+// Trámites que piden atención: prórrogas sin resolver, notas técnicas vigentes
+// (cuándo se vuelve a abastecer) e instituciones cerca del límite de oficios
+const alertasTramites = async (par) => {
+    const fechaHoy = hoy();
+    const [tramites, oficios] = await Promise.all([
+        TramiteContrato.findAll({
+            where: {
+                [Op.or]: [
+                    { tipo: 'prorroga', estado: 'solicitada' },
+                    { tipo: 'nota_tecnica', estado: { [Op.in]: ['solicitada', 'aprobada'] }, fecha_hasta: { [Op.gte]: fechaHoy } }
+                ]
+            },
+            include: [
+                { model: Contrato, attributes: ['id_contrato', 'numero_contrato', 'fecha_fin'], include: [{ model: Institucion, attributes: ['nombre'] }] },
+                { model: DetalleContrato, attributes: ['numero_renglon'], include: [{ model: Producto, attributes: ['nombre'] }] }
+            ],
+            order: [['fecha_hasta', 'ASC']]
+        }),
+        TramiteContrato.findAll({
+            where: { tipo: 'oficio', estado: 'registrado' }, attributes: ['id_tramite'],
+            include: [{
+                model: Contrato, attributes: ['id_institucion'], required: true,
+                include: [{ model: Institucion, attributes: ['id_institucion', 'nombre'] }, { model: ModalidadCompra, attributes: [], required: true, where: { contrato_abierto: false } }]
+            }]
+        })
+    ]);
+    const porInstitucion = {};
+    oficios.forEach(o => {
+        const i = o.Contrato.Institucion;
+        const g = porInstitucion[i.id_institucion] || (porInstitucion[i.id_institucion] = { id_institucion: i.id_institucion, institucion: i.nombre, oficios: 0 });
+        g.oficios += 1;
+    });
+    return {
+        tramites: tramites.map(t => ({
+            id_tramite: t.id_tramite, tipo: t.tipo, estado: t.estado, numero_documento: t.numero_documento,
+            id_contrato: t.Contrato.id_contrato, numero_contrato: t.Contrato.numero_contrato, institucion: t.Contrato.Institucion?.nombre,
+            producto: t.DetalleContrato?.Producto?.nombre, fecha_hasta: t.fecha_hasta,
+            dias_para_fin_contrato: diasEntre(fechaHoy, t.Contrato.fecha_fin), dias_restantes: diasEntre(fechaHoy, t.fecha_hasta)
+        })),
+        oficios: Object.values(porInstitucion).filter(g => g.oficios >= par.LIMITE_OFICIOS - 1).sort((a, b) => b.oficios - a.oficios)
+    };
+};
 
 const getPanel = async (req, res) => {
     try {
         const par = await obtenerParametros();
         const fechaHoy = hoy();
 
-        const [productos, lotes, contratos, pedidos, ingresos, sinDestino, cumplimiento] = await Promise.all([
+        const [productos, lotes, contratos, pedidos, ingresos, sinDestino, cumplimiento, tramites] = await Promise.all([
             Producto.findAll({ where: { activo: true }, include: [{ model: Lote, attributes: ['cantidad_disponible', 'condicion', 'fecha_vencimiento'] }] }),
             Lote.findAll({
                 where: { cantidad_disponible: { [Op.gt]: 0 }, condicion: { [Op.in]: ['disponible', 'cuarentena', 'bloqueado', 'vencido'] } },
@@ -46,7 +92,8 @@ const getPanel = async (req, res) => {
             }),
             Ingreso.findAll({ where: { estado: 'registrado' }, attributes: ['fecha_recepcion'] }),
             lotesSinDestino(par),
-            indicadoresCumplimiento()
+            indicadoresCumplimiento(),
+            alertasTramites(par)
         ]);
 
         const bajoMinimo = productos
@@ -64,7 +111,10 @@ const getPanel = async (req, res) => {
 
         const contratosPorVencer = contratos
             .filter(c => c.dias_para_fin <= par.DIAS_ALERTA_CONTRATO && c.tiene_saldo)
-            .map(c => ({ id_contrato: c.id_contrato, numero_contrato: c.numero_contrato, institucion: c.Institucion?.nombre, dias_para_fin: c.dias_para_fin, porcentaje_avance: c.porcentaje_avance }));
+            .map(c => ({
+                id_contrato: c.id_contrato, numero_contrato: c.numero_contrato, institucion: c.Institucion?.nombre, dias_para_fin: c.dias_para_fin,
+                porcentaje_avance: c.porcentaje_avance, ultimo_dia_pedido: c.ultimo_dia_pedido, contrato_abierto: c.contrato_abierto
+            }));
 
         const pedidosActivos = pedidos.filter(p => !['entregado', 'anulado'].includes(p.estado));
         const retrasados = pedidosActivos.filter(p => calcularRetraso(p) > 0);
@@ -157,7 +207,7 @@ const getPanel = async (req, res) => {
         res.json({
             graficas: { valor_inventario: valor, vencimientos, avance_contratos: avanceContratos, cumplimiento_instituciones: cumplimientoInstituciones },
             bitacora,
-            parametros: { dias_alerta_pedido: par.DIAS_ALERTA_PEDIDO, dias_alerta_contrato: par.DIAS_ALERTA_CONTRATO },
+            parametros: { dias_alerta_pedido: par.DIAS_ALERTA_PEDIDO, dias_alerta_contrato: par.DIAS_ALERTA_CONTRATO, limite_oficios: par.LIMITE_OFICIOS },
             indicadores: {
                 productos: productos.length,
                 productos_bajo_minimo: bajoMinimo.length,
@@ -184,7 +234,9 @@ const getPanel = async (req, res) => {
                 contratos: contratosPorVencer,
                 entregas_proximas: entregasProximas.map(resumenPedido),
                 retrasados: retrasados.map(resumenPedido),
-                sin_destino: sinDestino.slice(0, 20)
+                sin_destino: sinDestino.slice(0, 20),
+                tramites: tramites.tramites,
+                oficios: tramites.oficios
             },
             pedidos_recientes: pedidos.slice(0, 6).map(resumenPedido),
             actividad: meses

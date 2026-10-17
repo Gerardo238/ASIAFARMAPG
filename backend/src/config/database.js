@@ -1,5 +1,5 @@
 const { Sequelize } = require('sequelize');
-require('dotenv').config();
+require('./entorno');
 
 const sequelize = new Sequelize(
     process.env.DB_NAME,

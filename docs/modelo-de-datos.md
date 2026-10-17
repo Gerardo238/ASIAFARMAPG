@@ -34,6 +34,13 @@ erDiagram
     LOTE ||--o{ ASIGNACION_LOTE : "sale de"
     PEDIDO ||--|{ SEGUIMIENTO_PEDIDO : "etapas"
 
+    CONTRATO ||--o{ TRAMITE_CONTRATO : "prórrogas, notas técnicas, oficios"
+    DETALLE_CONTRATO ||--o{ TRAMITE_CONTRATO : "renglón (nota técnica)"
+    PEDIDO ||--o{ TRAMITE_CONTRATO : "pedido (oficio)"
+    PEDIDO ||--o{ DEVOLUCION_PEDIDO : "devuelve la institución"
+    DEVOLUCION_PEDIDO ||--|{ DETALLE_DEVOLUCION : ""
+    ASIGNACION_LOTE ||--o{ DETALLE_DEVOLUCION : "regresa al lote"
+
     USUARIO ||--o{ AUDITORIA : "hizo el cambio"
 
     PROVEEDOR { string nit UK }
@@ -43,7 +50,11 @@ erDiagram
     MOVIMIENTO { enum tipo decimal cantidad decimal saldo datetime fecha }
     CONTRATO { string nog string numero_contrato UK date fecha_inicio date fecha_fin int vigencia_minima_meses enum estado }
     DETALLE_CONTRATO { int numero_renglon decimal cantidad_contratada decimal precio_unitario }
-    PEDIDO { string numero_pedido UK date fecha_programada date fecha_real_entrega enum estado }
+    PEDIDO { string numero_pedido UK date fecha_programada date fecha_compromiso date fecha_real_entrega enum estado }
+    MODALIDAD_COMPRA { string nombre decimal monto_minimo decimal monto_maximo int dias_habiles_entrega bool contrato_abierto }
+    TRAMITE_CONTRATO { enum tipo string numero_documento date fecha_documento string causa date fecha_fin_anterior date fecha_desde date fecha_hasta enum estado }
+    DEVOLUCION_PEDIDO { date fecha_devolucion string causa string documento decimal unidades decimal monto enum estado }
+    DETALLE_DEVOLUCION { decimal cantidad }
     ASIGNACION_LOTE { decimal cantidad }
     AUDITORIA { string tabla string id_registro string accion json datos_antes json datos_despues string motivo }
 ```
@@ -61,6 +72,11 @@ erDiagram
 | Nada se borra: se anula y se puede restaurar. Todo cambio queda en la auditoría con usuario, fecha, motivo, antes y después. | `utils/auditoria.js` |
 | Cambiar fechas de un lote: solo administrador y con motivo obligatorio. | `loteController.updateLote` |
 | Lotes vencidos y contratos con plazo terminado cambian de estado solos (cada hora). | `services/vencimientos.js` |
+| Un pedido no puede exceder la existencia apta menos lo comprometido en otros pedidos pendientes. | `pedidoController.createPedido` |
+| El retraso se cuenta en días hábiles desde el día hábil siguiente a la fecha programada o a la de la carta de compromiso. | `services/analisis.js`, `utils/fechas.js` |
+| Ninguna entrega, carta de compromiso ni prórroga después del fin del contrato. La prórroga aprobada cambia el fin. | `pedidoController`, `tramiteController` |
+| La devolución de una institución regresa el producto a su lote y la cantidad al saldo del contrato; se puede anular. | `pedidoController.registrarDevolucion` |
+| Las columnas nuevas de tablas existentes se agregan solas al iniciar el servidor. | `config/migraciones.js` |
 
 ## Flujo de inventario
 
@@ -94,3 +110,5 @@ Búsqueda: laboratorio → producto → lote o rango de fechas de compra → ins
 - **Pedido:** pendiente → en_preparacion → empacado → en_transporte → entregado (o anulado). El retraso se calcula.
 - **Contrato:** vigente · completado · vencido · cancelado · anulado
 - **Ingreso:** registrado · anulado
+- **Trámite:** prórroga y nota técnica: solicitada → aprobada / rechazada (o anulado) · oficio: registrado (o anulado)
+- **Devolución:** registrada · anulada

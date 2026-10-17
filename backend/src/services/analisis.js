@@ -1,26 +1,35 @@
 // Cálculos de seguimiento que usan a la vez el panel de control y los
 // informes, para que ambos muestren siempre las mismas cifras.
 const { Op } = require('sequelize');
-const { Lote, Producto, Laboratorio, Ingreso, Proveedor, Ubicacion, Pedido, Contrato, Institucion, ModalidadCompra } = require('../models/index');
+const { Lote, Producto, Laboratorio, Ingreso, Proveedor, Ubicacion, Pedido, Contrato, Institucion, ModalidadCompra, TramiteContrato } = require('../models/index');
 const { cargarConAvance } = require('../controllers/contratoController');
-const { hoy, sumarMeses, sumarDias, diasEntre } = require('../utils/fechas');
+const { hoy, sumarMeses, sumarDias, diasEntre, diasHabilesEntre } = require('../utils/fechas');
 const { redondear } = require('./inventario');
 
-// Días de retraso: contra hoy si no se ha entregado, o contra la fecha real
+// Fecha contra la que se mide la puntualidad: la de la carta de compromiso
+// si el proveedor la presentó, si no la programada
+const fechaLimite = (p) => p.fecha_compromiso || p.fecha_programada;
+
+// Días HÁBILES de retraso, contados desde el día hábil siguiente a la fecha
+// límite: contra hoy si no se ha entregado, o contra la fecha real de entrega
 const calcularRetraso = (p) => {
     if (p.estado === 'anulado') return 0;
     const referencia = p.estado === 'entregado' ? p.fecha_real_entrega : hoy();
-    return referencia ? Math.max(0, diasEntre(p.fecha_programada, referencia)) : 0;
+    return referencia ? diasHabilesEntre(fechaLimite(p), referencia) : 0;
 };
+
+// Atributos del pedido que necesita calcularRetraso
+const ATRIBUTOS_RETRASO = ['estado', 'fecha_programada', 'fecha_compromiso', 'fecha_real_entrega'];
 
 // Estados en los que el producto todavía no ha salido de la droguería
 const SIN_DESPACHAR = ['pendiente', 'en_preparacion', 'empacado'];
 
 // Alerta preventiva: pedidos que no han salido de bodega y cuya fecha
-// programada llega en los próximos `dias` días (o ya llegó hoy).
+// límite (programada o de la carta de compromiso) llega en los próximos
+// `dias` días (o ya llegó hoy).
 const esEntregaProxima = (p, dias) => {
     if (!SIN_DESPACHAR.includes(p.estado)) return false;
-    const faltan = diasEntre(hoy(), p.fecha_programada);
+    const faltan = diasEntre(hoy(), fechaLimite(p));
     return faltan >= 0 && faltan <= dias;
 };
 
@@ -97,19 +106,28 @@ const resumirEntregas = (pedidos) => {
     };
 };
 
-// Un contrato cerrado se considera cumplido si se entregó todo lo adjudicado
-// y ninguno de sus pedidos llegó tarde.
+// Un contrato cerrado se considera cumplido si se entregó todo lo que la
+// institución estaba obligada a adquirir y ninguno de sus pedidos llegó tarde.
+// En contrato abierto el saldo no cuenta: la institución no está obligada a
+// comprarlo. Las prórrogas aprobadas ya movieron la fecha de fin del
+// contrato, así que lo entregado dentro de la prórroga cuenta como a tiempo.
 const evaluarContratosCerrados = async (filtro = {}) => {
     const cerrados = await cargarConAvance({ estado: { [Op.in]: ['completado', 'vencido', 'cancelado'] }, ...filtro });
     if (!cerrados.length) return [];
-    const entregados = await Pedido.findAll({
-        where: { id_contrato: cerrados.map(c => c.id_contrato), estado: 'entregado' },
-        attributes: ['id_contrato', 'estado', 'fecha_programada', 'fecha_real_entrega']
-    });
+    const ids = cerrados.map(c => c.id_contrato);
+    const [entregados, prorrogas] = await Promise.all([
+        Pedido.findAll({ where: { id_contrato: ids, estado: 'entregado' }, attributes: ['id_contrato', ...ATRIBUTOS_RETRASO] }),
+        TramiteContrato.findAll({ where: { id_contrato: ids, tipo: 'prorroga', estado: 'aprobada' }, attributes: ['id_contrato'] })
+    ]);
     return cerrados.map(c => {
         const propios = entregados.filter(p => p.id_contrato === c.id_contrato);
         const atrasados = propios.filter(p => calcularRetraso(p) > 0).length;
-        return { ...c, pedidos_atrasados: atrasados, cumplido: !c.tiene_saldo && atrasados === 0 };
+        const saldoExigible = c.tiene_saldo && !c.contrato_abierto;
+        return {
+            ...c, pedidos_atrasados: atrasados,
+            prorrogas_aprobadas: prorrogas.filter(t => t.id_contrato === c.id_contrato).length,
+            cumplido: !saldoExigible && atrasados === 0
+        };
     });
 };
 
@@ -119,7 +137,7 @@ const indicadoresCumplimiento = async ({ desde, hasta } = {}) => {
     const [pedidos, cerrados] = await Promise.all([
         Pedido.findAll({
             where: { estado: 'entregado', fecha_real_entrega: { [Op.between]: [inicio, fin] } },
-            attributes: ['id_pedido', 'estado', 'fecha_programada', 'fecha_real_entrega']
+            attributes: ['id_pedido', ...ATRIBUTOS_RETRASO]
         }),
         evaluarContratosCerrados()
     ]);
@@ -134,6 +152,6 @@ const indicadoresCumplimiento = async ({ desde, hasta } = {}) => {
 };
 
 module.exports = {
-    calcularRetraso, esEntregaProxima, SIN_DESPACHAR, lotesSinDestino,
+    calcularRetraso, fechaLimite, ATRIBUTOS_RETRASO, esEntregaProxima, SIN_DESPACHAR, lotesSinDestino,
     indicadoresCumplimiento, resumirEntregas, evaluarContratosCerrados, PEDIDO_CON_CONTRATO
 };

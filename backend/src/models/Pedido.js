@@ -43,6 +43,14 @@ const Pedido = sequelize.define('Pedido', {
     fecha_real_entrega: {
         type: DataTypes.DATEONLY
     },
+    // Carta de compromiso de entrega: si el proveedor pidió más tiempo, el
+    // retraso se cuenta desde el día hábil siguiente a esta fecha.
+    fecha_compromiso: {
+        type: DataTypes.DATEONLY
+    },
+    documento_compromiso: {
+        type: DataTypes.STRING(100)
+    },
     estado: {
         type: DataTypes.ENUM(...ESTADOS_PEDIDO),
         defaultValue: 'pendiente'

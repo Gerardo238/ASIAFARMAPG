@@ -15,7 +15,18 @@ const CATALOGOS = {
     'formas-farmaceuticas': simple(FormaFarmaceutica, 'formas_farmaceuticas', 'forma farmacéutica'),
     'unidades-medida': simple(UnidadMedida, 'unidades_medida', 'unidad de medida'),
     'tipos-institucion': simple(TipoInstitucion, 'tipos_institucion', 'tipo de institución'),
-    'modalidades-compra': simple(ModalidadCompra, 'modalidades_compra', 'modalidad de compra'),
+    'modalidades-compra': crearControladorCatalogo({
+        modelo: ModalidadCompra, tabla: 'modalidades_compra', etiqueta: 'modalidad de compra',
+        campos: ['nombre', 'descripcion', 'monto_minimo', 'monto_maximo', 'dias_habiles_entrega', 'contrato_abierto'],
+        validar: (d) => {
+            const numero = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+            const [min, max, dias] = [numero(d.monto_minimo), numero(d.monto_maximo), numero(d.dias_habiles_entrega)];
+            if ([min, max].some(v => v !== null && !(v >= 0))) throw new ErrorNegocio('Los montos deben ser números positivos.');
+            if (min !== null && max !== null && min > max) throw new ErrorNegocio('El monto mínimo no puede ser mayor que el máximo.');
+            if (dias !== null && !(Number.isInteger(dias) && dias >= 1 && dias <= 60)) throw new ErrorNegocio('El plazo de entrega debe ser de 1 a 60 días hábiles.');
+            if (d.contrato_abierto === null || d.contrato_abierto === undefined) d.contrato_abierto = false;
+        }
+    }),
     'motivos-movimiento': crearControladorCatalogo({
         modelo: MotivoMovimiento, tabla: 'motivos_movimiento', etiqueta: 'motivo',
         campos: ['nombre', 'tipo'],

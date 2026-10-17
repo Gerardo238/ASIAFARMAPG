@@ -1,4 +1,9 @@
 # graphify: el grafo y su configuración para Claude se quedan solo en la computadora
 graphify-out/
+
+# Configuración propia de cada computadora (contraseña de PostgreSQL, puerto)
+backend/.env.local
+frontend/.env.local
+respaldos/
 .claude/
 CLAUDE.md

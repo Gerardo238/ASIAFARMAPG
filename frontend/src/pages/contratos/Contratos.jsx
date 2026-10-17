@@ -38,7 +38,7 @@ const Contratos = () => {
                     { clave: 'numero_contrato', titulo: 'Contrato', render: c => <span className="font-medium whitespace-nowrap" style={{ color: '#3D7EF6' }}>{c.numero_contrato}</span> },
                     { clave: 'nog', titulo: 'NOG' },
                     { clave: 'inst', titulo: 'Institución', render: c => c.Institucion?.nombre },
-                    { clave: 'modalidad', titulo: 'Modalidad', render: c => c.ModalidadCompra?.nombre },
+                    { clave: 'modalidad', titulo: 'Modalidad', render: c => <div>{c.ModalidadCompra?.nombre}{c.contrato_abierto && <p className="text-[11px] opacity-70">Abierto</p>}</div> },
                     {
                         clave: 'vigencia', titulo: 'Vigencia', render: c => (
                             <div>
@@ -54,7 +54,7 @@ const Contratos = () => {
                 ]}
             />
 
-            {nuevo && <FormContrato contrato={null} alCerrar={() => setNuevo(false)} alGuardar={() => { setNuevo(false); mostrar('Contrato creado'); recargar(); }} />}
+            {nuevo && <FormContrato contrato={null} alCerrar={() => setNuevo(false)} alGuardar={(advertencia) => { setNuevo(false); mostrar(advertencia ? `Contrato creado. ${advertencia}` : 'Contrato creado', advertencia ? 'amarillo' : 'verde'); recargar(); }} />}
         </Pagina>
     );
 };

@@ -6,7 +6,9 @@ const POR_DEFECTO = {
     DIAS_SEMAFORO_ROJO: 90,
     DIAS_SEMAFORO_AMARILLO: 180,
     DIAS_ALERTA_CONTRATO: 30,
-    DIAS_ALERTA_PEDIDO: 5
+    DIAS_ALERTA_PEDIDO: 5,
+    DIAS_HABILES_ENTREGA: 3,
+    LIMITE_OFICIOS: 3
 };
 
 const obtenerParametro = async (clave) => {

@@ -1,13 +1,19 @@
 // Adjuntos de ingresos, lotes y productos: la foto o el PDF de la factura,
 // el certificado de análisis del lote, el registro sanitario del producto...
 // El archivo llega como base64 dentro del JSON (máximo 10 MB).
-const { Adjunto, Ingreso, Lote, Producto, Usuario } = require('../models/index');
+const { Adjunto, Ingreso, Lote, Producto, Usuario, Contrato, Pedido } = require('../models/index');
 const { manejarError, ErrorNegocio, exigirTexto } = require('../utils/errores');
 const { registrarAuditoria } = require('../utils/auditoria');
 
 const TIPOS_PERMITIDOS = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 const TAMANO_MAXIMO = 10 * 1024 * 1024;
-const MODELOS = { ingresos: Ingreso, lotes: Lote, productos: Producto };
+const MODELOS = { ingresos: Ingreso, lotes: Lote, productos: Producto, contratos: Contrato, pedidos: Pedido };
+// Quién adjunta a cada registro: bodega sus compras y lotes; el encargado de
+// contratos el contrato, sus prórrogas y oficios; ambos las actas de un pedido
+const ROLES_ADJUNTAR = {
+    ingresos: ['administrador', 'bodeguero'], lotes: ['administrador', 'bodeguero'], productos: ['administrador', 'bodeguero'],
+    contratos: ['administrador', 'encargado_contratos'], pedidos: ['administrador', 'bodeguero', 'encargado_contratos']
+};
 
 // Datos del adjunto sin el archivo (para listas)
 const sinArchivo = (a) => {
@@ -46,7 +52,8 @@ const crear = async (req, res) => {
     try {
         const { entidad, id_registro, nombre_archivo, tipo_mime, datos, descripcion } = req.body;
         const Modelo = MODELOS[entidad];
-        if (!Modelo) throw new ErrorNegocio('Solo se puede adjuntar a un ingreso, un lote o un producto.');
+        if (!Modelo) throw new ErrorNegocio('Solo se puede adjuntar a un ingreso, un lote, un producto, un contrato o un pedido.');
+        if (!ROLES_ADJUNTAR[entidad].includes(req.usuario.rol)) throw new ErrorNegocio('No tienes permisos para adjuntar documentos a este registro.', 403);
         if (!(await Modelo.findByPk(id_registro))) throw new ErrorNegocio('El registro no existe.', 404);
         exigirTexto(nombre_archivo, 'El archivo no tiene nombre.');
         if (!TIPOS_PERMITIDOS.includes(tipo_mime)) throw new ErrorNegocio('Solo se aceptan fotos (JPG, PNG, WEBP) o PDF.');

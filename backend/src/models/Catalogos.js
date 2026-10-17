@@ -19,7 +19,17 @@ const Ubicacion = definirCatalogo('Ubicacion', 'ubicaciones', 'id_ubicacion');
 const FormaFarmaceutica = definirCatalogo('FormaFarmaceutica', 'formas_farmaceuticas', 'id_forma_farmaceutica');
 const UnidadMedida = definirCatalogo('UnidadMedida', 'unidades_medida', 'id_unidad_medida');
 const TipoInstitucion = definirCatalogo('TipoInstitucion', 'tipos_institucion', 'id_tipo_institucion');
-const ModalidadCompra = definirCatalogo('ModalidadCompra', 'modalidades_compra', 'id_modalidad');
+// Modalidad de compra de la Ley de Contrataciones del Estado. Además del
+// nombre guarda el rango de monto que la define, el plazo de entrega de sus
+// órdenes y si es contrato abierto (el proveedor administra sus entregas y la
+// institución no está obligada a comprar todo lo adjudicado).
+const ModalidadCompra = sequelize.define('ModalidadCompra', {
+    ...camposCatalogo('id_modalidad'),
+    monto_minimo: { type: DataTypes.DECIMAL(14, 2) },
+    monto_maximo: { type: DataTypes.DECIMAL(14, 2) },
+    dias_habiles_entrega: { type: DataTypes.INTEGER },
+    contrato_abierto: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false }
+}, { tableName: 'modalidades_compra', timestamps: true });
 
 // Motivos de entrada/salida de inventario. Los de "sistema" (compra, despacho,
 // anulaciones) solo los usa el sistema; los demás son ajustes manuales.

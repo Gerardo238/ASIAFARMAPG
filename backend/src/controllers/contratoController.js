@@ -4,17 +4,19 @@ const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const {
     Contrato, Institucion, Usuario, DetalleContrato, Producto, ModalidadCompra, Pedido, DetallePedido,
-    UnidadMedida
+    UnidadMedida, DevolucionPedido, DetalleDevolucion, TramiteContrato
 } = require('../models/index');
 const { manejarError, ErrorNegocio, exigirTexto, exigirCantidad } = require('../utils/errores');
 const { registrarAuditoria, instantanea } = require('../utils/auditoria');
-const { obtenerParametro } = require('../services/parametros');
+const { obtenerParametro, obtenerParametros } = require('../services/parametros');
 const { redondear } = require('../services/inventario');
-const { hoy, esFechaValida, diasEntre } = require('../utils/fechas');
+const { hoy, esFechaValida, diasEntre, sumarDiasHabiles, formatoGT } = require('../utils/fechas');
+
+const ATRIBUTOS_MODALIDAD = ['id_modalidad', 'nombre', 'monto_minimo', 'monto_maximo', 'dias_habiles_entrega', 'contrato_abierto'];
 
 const INCLUDE_CONTRATO = [
     { model: Institucion, attributes: ['id_institucion', 'nombre', 'nit', 'departamento'] },
-    { model: ModalidadCompra, attributes: ['id_modalidad', 'nombre'] },
+    { model: ModalidadCompra, attributes: ATRIBUTOS_MODALIDAD },
     { model: Usuario, attributes: ['nombre', 'apellido'] }
 ];
 
@@ -23,62 +25,117 @@ const INCLUDE_RENGLONES = {
     include: [{ model: Producto, attributes: ['id_producto', 'nombre', 'codigo', 'concentracion'], include: [{ model: UnidadMedida, attributes: ['nombre'] }] }]
 };
 
-// Cantidad pedida (pedidos no anulados) y entregada (pedidos entregados) por renglón
+// Cantidad pedida (pedidos no anulados) y entregada (pedidos entregados) por
+// renglón. Lo que la institución devolvió no cuenta como entregado y vuelve
+// al saldo por pedir.
 const calcularAvance = async (idsRenglones, transaction) => {
     const avance = {};
     if (!idsRenglones.length) return avance;
-    const detalles = await DetallePedido.findAll({
-        where: { id_detalle_contrato: idsRenglones },
-        include: [{ model: Pedido, attributes: ['estado'], where: { estado: { [Op.ne]: 'anulado' } } }],
-        transaction
-    });
+    const [detalles, devueltos] = await Promise.all([
+        DetallePedido.findAll({
+            where: { id_detalle_contrato: idsRenglones },
+            include: [{ model: Pedido, attributes: ['estado'], where: { estado: { [Op.ne]: 'anulado' } } }],
+            transaction
+        }),
+        DetalleDevolucion.findAll({
+            attributes: ['cantidad'],
+            include: [
+                { model: DevolucionPedido, attributes: [], where: { estado: 'registrada' } },
+                { model: DetallePedido, attributes: ['id_detalle_contrato'], where: { id_detalle_contrato: idsRenglones } }
+            ],
+            transaction
+        })
+    ]);
+    const de = (id) => avance[id] || (avance[id] = { pedida: 0, entregada: 0, devuelta: 0 });
     detalles.forEach(d => {
-        const a = avance[d.id_detalle_contrato] || (avance[d.id_detalle_contrato] = { pedida: 0, entregada: 0 });
+        const a = de(d.id_detalle_contrato);
         a.pedida += Number(d.cantidad);
         if (d.Pedido.estado === 'entregado') a.entregada += Number(d.cantidad);
+    });
+    devueltos.forEach(d => {
+        const a = de(d.DetallePedido.id_detalle_contrato);
+        const cantidad = Number(d.cantidad);
+        a.devuelta += cantidad; a.pedida -= cantidad; a.entregada -= cantidad;
     });
     return avance;
 };
 
-const conAvance = (contrato, avance) => {
+// Días hábiles que tiene el proveedor para entregar una orden del contrato
+const plazoEntrega = (modalidad, diasPorDefecto) =>
+    modalidad?.dias_habiles_entrega != null ? Number(modalidad.dias_habiles_entrega) : diasPorDefecto;
+
+const conAvance = (contrato, avance, diasPorDefecto = 3) => {
     const datos = contrato.get({ plain: true });
     let montoEntregado = 0;
     const renglones = (datos.DetalleContratos || [])
         .filter(r => r.activo)
         .sort((a, b) => a.numero_renglon - b.numero_renglon)
         .map(r => {
-            const a = avance[r.id_detalle_contrato] || { pedida: 0, entregada: 0 };
+            const a = avance[r.id_detalle_contrato] || { pedida: 0, entregada: 0, devuelta: 0 };
             montoEntregado += a.entregada * Number(r.precio_unitario);
             return {
                 ...r,
                 cantidad_pedida: redondear(a.pedida),
                 cantidad_entregada: redondear(a.entregada),
+                cantidad_devuelta: redondear(a.devuelta),
                 saldo_por_pedir: redondear(Number(r.cantidad_contratada) - a.pedida),
                 saldo_por_entregar: redondear(Number(r.cantidad_contratada) - a.entregada)
             };
         });
     delete datos.DetalleContratos;
     const monto = Number(datos.monto_total) || 0;
+    const plazo = plazoEntrega(datos.ModalidadCompra, diasPorDefecto);
     return {
         ...datos,
         renglones,
         monto_entregado: redondear(montoEntregado),
         porcentaje_avance: monto > 0 ? Math.round((montoEntregado / monto) * 100) : 0,
         dias_para_fin: diasEntre(hoy(), datos.fecha_fin),
-        tiene_saldo: renglones.some(r => r.saldo_por_entregar > 0)
+        tiene_saldo: renglones.some(r => r.saldo_por_entregar > 0),
+        // Contrato abierto: el proveedor administra sus entregas y la institución no está obligada a comprar el saldo
+        contrato_abierto: !!datos.ModalidadCompra?.contrato_abierto,
+        plazo_entrega_dias: plazo,
+        // Pedirlo después de esta fecha deja menos días hábiles que el plazo de entrega antes del fin del contrato
+        ultimo_dia_pedido: sumarDiasHabiles(datos.fecha_fin, -plazo)
     };
 };
 
 const cargarConAvance = async (where, transaction) => {
-    const contratos = await Contrato.findAll({
-        where, include: [...INCLUDE_CONTRATO, INCLUDE_RENGLONES],
-        order: [['fecha_fin', 'ASC'], ['id_contrato', 'ASC']],
-        transaction
-    });
+    const [contratos, diasPorDefecto] = await Promise.all([
+        Contrato.findAll({
+            where, include: [...INCLUDE_CONTRATO, INCLUDE_RENGLONES],
+            order: [['fecha_fin', 'ASC'], ['id_contrato', 'ASC']],
+            transaction
+        }),
+        obtenerParametro('DIAS_HABILES_ENTREGA')
+    ]);
     const ids = contratos.flatMap(c => c.DetalleContratos.map(r => r.id_detalle_contrato));
     const avance = await calcularAvance(ids, transaction);
-    return contratos.map(c => conAvance(c, avance));
+    return contratos.map(c => conAvance(c, avance, diasPorDefecto));
 };
+
+// Si el monto del contrato no cae en el rango de su modalidad se avisa, pero
+// no se impide: el contrato de la droguería puede ser solo parte del evento.
+const advertenciaMonto = (modalidad, monto) => {
+    if (!modalidad) return null;
+    const min = modalidad.monto_minimo != null ? Number(modalidad.monto_minimo) : null;
+    const max = modalidad.monto_maximo != null ? Number(modalidad.monto_maximo) : null;
+    const q = (n) => `Q${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (min !== null && monto < min) return `El monto (${q(monto)}) es menor al mínimo de ${modalidad.nombre} (${q(min)}). Revisa la modalidad.`;
+    if (max !== null && monto > max) return `El monto (${q(monto)}) supera el máximo de ${modalidad.nombre} (${q(max)}). Revisa la modalidad.`;
+    return null;
+};
+
+// Oficios de advertencia vigentes que una institución ha enviado por
+// contratos que no son abiertos (en contrato abierto no dejan de comprar)
+const contarOficios = async (id_institucion, transaction) => TramiteContrato.count({
+    where: { tipo: 'oficio', estado: 'registrado' },
+    include: [{
+        model: Contrato, attributes: [], required: true, where: { id_institucion },
+        include: [{ model: ModalidadCompra, attributes: [], required: true, where: { contrato_abierto: false } }]
+    }],
+    transaction
+});
 
 // Filtros: estado, id_institucion
 const getContratos = async (req, res) => {
@@ -94,12 +151,30 @@ const getContrato = async (req, res) => {
     try {
         const [contrato] = await cargarConAvance({ id_contrato: req.params.id });
         if (!contrato) return res.status(404).json({ mensaje: 'Contrato no encontrado' });
-        const pedidos = await Pedido.findAll({
-            where: { id_contrato: contrato.id_contrato },
-            order: [['fecha_programada', 'DESC']],
-            attributes: ['id_pedido', 'numero_pedido', 'estado', 'fecha_programada', 'fecha_real_entrega', 'monto_total']
+        const [pedidos, tramites, oficios, par] = await Promise.all([
+            Pedido.findAll({
+                where: { id_contrato: contrato.id_contrato },
+                order: [['fecha_programada', 'DESC']],
+                attributes: ['id_pedido', 'numero_pedido', 'estado', 'fecha_programada', 'fecha_compromiso', 'fecha_real_entrega', 'monto_total']
+            }),
+            TramiteContrato.findAll({
+                where: { id_contrato: contrato.id_contrato },
+                include: [
+                    { model: Usuario, attributes: ['nombre', 'apellido'] },
+                    { model: Usuario, as: 'Resolvio', attributes: ['nombre', 'apellido'] },
+                    { model: DetalleContrato, attributes: ['numero_renglon'], include: [{ model: Producto, attributes: ['nombre', 'concentracion'] }] },
+                    { model: Pedido, attributes: ['id_pedido', 'numero_pedido'] }
+                ],
+                order: [['fecha_documento', 'DESC'], ['id_tramite', 'DESC']]
+            }),
+            contarOficios(contrato.id_institucion),
+            obtenerParametros()
+        ]);
+        res.json({
+            ...contrato, pedidos, tramites,
+            oficios_institucion: oficios, limite_oficios: par.LIMITE_OFICIOS,
+            advertencia_monto: advertenciaMonto(contrato.ModalidadCompra, Number(contrato.monto_total))
         });
-        res.json({ ...contrato, pedidos });
     } catch (error) { manejarError(res, error, 'Error al obtener contrato'); }
 };
 
@@ -168,7 +243,8 @@ const createContrato = async (req, res) => {
             await registrarAuditoria({ req, tabla: 'contratos', id_registro: nuevo.id_contrato, accion: 'crear', despues: completo, transaction });
             return nuevo;
         });
-        res.status(201).json({ mensaje: 'Contrato creado exitosamente', contrato });
+        const advertencia = advertenciaMonto(await ModalidadCompra.findByPk(contrato.id_modalidad), Number(contrato.monto_total));
+        res.status(201).json({ mensaje: 'Contrato creado exitosamente', contrato, advertencia });
     } catch (error) { manejarError(res, error, 'Error al crear contrato'); }
 };
 
@@ -178,6 +254,7 @@ const createContrato = async (req, res) => {
 const updateContrato = async (req, res) => {
     try {
         const motivo = exigirTexto(req.body.motivo, 'Indica el motivo de la modificación del contrato.');
+        let advertencia = null;
         await sequelize.transaction(async (transaction) => {
             const contrato = await Contrato.findByPk(req.params.id, { include: [INCLUDE_RENGLONES], transaction, lock: { level: transaction.LOCK.UPDATE, of: Contrato } });
             if (!contrato) throw new ErrorNegocio('Contrato no encontrado', 404);
@@ -222,12 +299,18 @@ const updateContrato = async (req, res) => {
 
             const monto = redondear(renglones.reduce((s, r) => s + Number(r.cantidad_contratada) * Number(r.precio_unitario), 0));
             const encabezado = tomarEncabezado(req.body);
+            // El plazo se amplía con una prórroga aprobada, no editando el contrato
+            if (encabezado.fecha_fin && encabezado.fecha_fin !== contrato.fecha_fin) {
+                const prorrogas = await TramiteContrato.count({ where: { id_contrato: contrato.id_contrato, tipo: 'prorroga', estado: { [Op.in]: ['solicitada', 'aprobada'] } }, transaction });
+                if (prorrogas) throw new ErrorNegocio('El contrato tiene prórrogas; la fecha de fin solo cambia al aprobar o anular una prórroga.');
+            }
             if (encabezado.fecha_fin) encabezado.estado = encabezado.fecha_fin < hoy() ? 'vencido' : 'vigente';
             await contrato.update({ ...encabezado, monto_total: monto }, { transaction });
             const despues = await Contrato.findByPk(contrato.id_contrato, { include: [INCLUDE_RENGLONES], transaction });
             await registrarAuditoria({ req, tabla: 'contratos', id_registro: contrato.id_contrato, accion: 'editar', antes, despues, motivo, transaction });
+            advertencia = advertenciaMonto(await ModalidadCompra.findByPk(contrato.id_modalidad, { transaction }), monto);
         });
-        res.json({ mensaje: 'Contrato actualizado exitosamente' });
+        res.json({ mensaje: 'Contrato actualizado exitosamente', advertencia });
     } catch (error) { manejarError(res, error, 'Error al actualizar contrato'); }
 };
 
@@ -277,6 +360,16 @@ const verificarContratoCompletado = async (id_contrato, req, transaction) => {
     }
 };
 
+// Una devolución deja saldo otra vez: un contrato completado vuelve a estar
+// vigente (o vencido, si ya pasó su fecha de fin)
+const reabrirContrato = async (id_contrato, req, motivo, transaction) => {
+    const contrato = await Contrato.findByPk(id_contrato, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!contrato || contrato.estado !== 'completado') return;
+    const antes = instantanea(contrato);
+    await contrato.update({ estado: contrato.fecha_fin < hoy() ? 'vencido' : 'vigente' }, { transaction });
+    await registrarAuditoria({ req, tabla: 'contratos', id_registro: id_contrato, accion: 'cambio_estado', antes, despues: contrato, motivo, transaction });
+};
+
 // Vida útil mínima que exige el contrato al despachar
 const vigenciaDelContrato = async (contrato) =>
     contrato.vigencia_minima_meses !== null && contrato.vigencia_minima_meses !== undefined
@@ -285,5 +378,6 @@ const vigenciaDelContrato = async (contrato) =>
 
 module.exports = {
     getContratos, getContrato, createContrato, updateContrato, cambiarEstadoContrato,
-    calcularAvance, cargarConAvance, verificarContratoCompletado, vigenciaDelContrato, INCLUDE_RENGLONES
+    calcularAvance, cargarConAvance, verificarContratoCompletado, reabrirContrato, vigenciaDelContrato,
+    plazoEntrega, contarOficios, INCLUDE_RENGLONES, ATRIBUTOS_MODALIDAD
 };

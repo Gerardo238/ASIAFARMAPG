@@ -62,6 +62,7 @@ const createAjuste = async (req, res) => {
 
         const motivo = await MotivoMovimiento.findByPk(id_motivo);
         if (!motivo || !motivo.activo) throw new ErrorNegocio('Selecciona un motivo válido.');
+        if (motivo.codigo === 'DEVOLUCION_CLIENTE') throw new ErrorNegocio('La devolución de una institución se registra desde el pedido entregado (botón "Registrar devolución"), para que quede ligada al pedido, al lote y al contrato.');
         if (motivo.sistema) throw new ErrorNegocio('Ese motivo lo usa el sistema; las compras se registran en Ingresos y las salidas por venta en Pedidos.');
 
         const movimiento = await sequelize.transaction(async (transaction) => {

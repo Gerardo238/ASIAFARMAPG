@@ -91,7 +91,7 @@ const Movimientos = () => {
                 pie={<><Boton variante="secundario" onClick={() => setForm(null)}>Cancelar</Boton><Boton type="submit" form="form-ajuste">Registrar</Boton></>}>
                 {form && (
                     <form id="form-ajuste" onSubmit={guardar} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <Aviso className="md:col-span-2">Usa ajustes solo para merma, daño, destrucción por vencimiento, devoluciones o diferencias de conteo físico.</Aviso>
+                        <Aviso className="md:col-span-2">Usa ajustes solo para merma, daño, destrucción por vencimiento, devoluciones a proveedor o diferencias de conteo físico. Si una institución devuelve producto, regístralo desde el pedido entregado (botón "Registrar devolución"), para que quede ligado al pedido, al lote y al contrato.</Aviso>
                         <Campo etiqueta="Producto" obligatorio>
                             <Selector vacio="Seleccionar" required value={form.id_producto} onChange={e => setForm({ ...form, id_producto: e.target.value, id_lote: '' })}
                                 opciones={productos.map(p => ({ value: p.id_producto, label: `${p.nombre} ${p.concentracion || ''}` }))} />

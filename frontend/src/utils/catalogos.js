@@ -35,6 +35,21 @@ export const ESTADOS_CONTRATO = {
     anulado: { label: 'Anulado', tono: 'gris' }
 };
 
+// Trámites del contrato: prórrogas, notas técnicas (contrato abierto) y oficios
+export const TIPOS_TRAMITE = {
+    prorroga: { label: 'Prórroga', tono: 'amarillo' },
+    nota_tecnica: { label: 'Nota técnica', tono: 'morado' },
+    oficio: { label: 'Oficio de advertencia', tono: 'rojo' }
+};
+
+export const ESTADOS_TRAMITE = {
+    solicitada: { label: 'En trámite', tono: 'amarillo' },
+    aprobada: { label: 'Aprobada', tono: 'verde' },
+    rechazada: { label: 'Rechazada', tono: 'rojo' },
+    registrado: { label: 'Registrado', tono: 'gris' },
+    anulado: { label: 'Anulado', tono: 'gris' }
+};
+
 export const ESTADOS_INGRESO = {
     registrado: { label: 'Registrado', tono: 'verde' },
     anulado: { label: 'Anulado', tono: 'gris' }
@@ -58,7 +73,7 @@ export const TABLAS_AUDITORIA = {
     laboratorios: 'Laboratorios', parametros: 'Parámetros', ubicaciones: 'Ubicaciones',
     formas_farmaceuticas: 'Formas farmacéuticas', unidades_medida: 'Unidades de medida',
     tipos_institucion: 'Tipos de institución', modalidades_compra: 'Modalidades de compra',
-    motivos_movimiento: 'Motivos de movimiento'
+    motivos_movimiento: 'Motivos de movimiento', tramites_contrato: 'Trámites de contrato', devoluciones_pedido: 'Devoluciones'
 };
 
 export const ROLES = {

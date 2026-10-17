@@ -1,7 +1,7 @@
 // BORRA TODA LA BASE DE DATOS y la vuelve a crear con el modelo actual,
 // los catálogos base y el administrador inicial. Solo para desarrollo.
 // Uso: npm run db:reset -- --confirmar
-require('dotenv').config();
+require('../config/entorno');
 const sequelize = require('../config/database');
 require('../models/index');
 const { sembrarCatalogos } = require('./catalogos');

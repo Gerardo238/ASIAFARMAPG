@@ -28,7 +28,7 @@ const Miniatura = ({ adjunto }) => {
 };
 
 // Documentos de un ingreso, lote o producto: foto o PDF de la factura, certificados...
-const Adjuntos = ({ entidad, id, titulo = 'Documentos adjuntos', nota, tipoInicial = 'Factura', className = '' }) => {
+const Adjuntos = ({ entidad, id, titulo = 'Documentos adjuntos', nota, tipoInicial = 'Factura', className = '', permiso = 'adjuntos.subir', vacio }) => {
     const c = useColors();
     const { usuario } = useAuth();
     const [lista, setLista] = useState([]);
@@ -38,7 +38,7 @@ const Adjuntos = ({ entidad, id, titulo = 'Documentos adjuntos', nota, tipoInici
     const entrada = useRef(null);
     const [dialogo, pedirMotivo] = useDialogoMotivo();
     const [aviso, mostrar] = useAvisos();
-    const puedeSubir = puede(usuario, 'adjuntos.subir');
+    const puedeSubir = puede(usuario, permiso);
 
     const cargar = useCallback(() => {
         if (!id) return;
@@ -87,7 +87,7 @@ const Adjuntos = ({ entidad, id, titulo = 'Documentos adjuntos', nota, tipoInici
             {lista.length === 0 ? (
                 <button type="button" disabled={!puedeSubir} onClick={() => entrada.current?.click()}
                     className="w-full rounded-xl py-8 text-center text-[13px]" style={{ border: `1.5px dashed ${c.inputBorder}`, color: c.textSecondary }}>
-                    {puedeSubir ? 'Todavía no hay documentos. Toca aquí para adjuntar una foto o el PDF de la factura.' : 'Todavía no hay documentos.'}
+                    {puedeSubir ? (vacio || 'Todavía no hay documentos. Toca aquí para adjuntar una foto o el PDF de la factura.') : 'Todavía no hay documentos.'}
                 </button>
             ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">

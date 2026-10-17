@@ -1,7 +1,8 @@
 import axios from 'axios';
 
+// La dirección del backend se puede cambiar en frontend/.env.local (VITE_API_URL)
 const api = axios.create({
-    baseURL: 'http://localhost:3010/api',
+    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3010/api',
 });
 
 api.interceptors.request.use((config) => {
