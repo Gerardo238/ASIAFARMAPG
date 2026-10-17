@@ -159,6 +159,17 @@ const PedidoDetalle = () => {
     }));
     const asignaciones = lineas.flatMap(d => (d.AsignacionLotes || []).map(a => ({ ...a, producto: d.Producto?.nombre, concentracion: d.Producto?.concentracion, devolvible: Number(a.cantidad) - (devueltoAsig[a.id_asignacion] || 0) })));
     const puedeDevolver = puede(usuario, 'pedidos.devolucion') && pedido.estado === 'entregado' && asignaciones.some(a => a.devolvible > 0);
+    // Reponer: lo devuelto volvió al saldo del contrato; se abre un pedido nuevo ya lleno con esas cantidades
+    const porReponer = {};
+    devoluciones.filter(d => d.estado === 'registrada').forEach(d => d.DetalleDevolucions.forEach(x => {
+        const linea = lineas.find(l => l.id_detalle_pedido === x.id_detalle_pedido);
+        if (linea) porReponer[linea.id_detalle_contrato] = (porReponer[linea.id_detalle_contrato] || 0) + Number(x.cantidad);
+    }));
+    const puedeReponer = Object.keys(porReponer).length > 0 && pedido.Contrato?.estado === 'vigente' && puede(usuario, 'pedidos.crear');
+    const reponer = () => {
+        const reponerTexto = Object.entries(porReponer).map(([renglon, cantidad]) => `${renglon}:${cantidad}`).join(',');
+        navigate(`/pedidos?contrato=${pedido.Contrato.id_contrato}&reponer=${reponerTexto}&de=${pedido.numero_pedido}`);
+    };
     const abrirDevolucion = () => { setError(''); setDevolucion({ fecha_devolucion: hoyISO(), causa: '', documento: '', descripcion: '', cuarentena: true, cantidades: {} }); };
     const causas = pedido.causas_devolucion || {};
 
@@ -221,7 +232,10 @@ const PedidoDetalle = () => {
                         {siguiente && puedeAvanzar && (
                             <Boton variante="claro" icono={ChevronRight} onClick={() => { setError(''); setAvance({ observacion: '', fecha_entrega: hoyISO() }); }}>{siguiente}</Boton>
                         )}
-                        {puedeDevolver && <Boton variante="claro" icono={Undo2} onClick={abrirDevolucion}>Registrar devolución</Boton>}
+                        {puedeReponer && <Boton variante="claro" icono={Truck} onClick={reponer}>Reponer lo devuelto (nuevo pedido)</Boton>}
+                        {puedeDevolver && (puedeReponer
+                            ? <button onClick={abrirDevolucion} className="af-boton flex items-center justify-center gap-1.5 h-9 rounded-[7px] text-[13px] text-white/85 hover:bg-white/10" style={{ border: '1px solid rgba(255,255,255,0.25)' }}><Undo2 size={14} />Registrar otra devolución</button>
+                            : <Boton variante="claro" icono={Undo2} onClick={abrirDevolucion}>Registrar devolución</Boton>)}
                         {puedeComprometer && (
                             <button onClick={() => { setError(''); setCompromiso({ fecha_compromiso: '', documento: '', motivo: '' }); }}
                                 className="af-boton flex items-center justify-center gap-1.5 h-9 rounded-[7px] text-[13px] text-white/85 hover:bg-white/10" style={{ border: '1px solid rgba(255,255,255,0.25)' }}>

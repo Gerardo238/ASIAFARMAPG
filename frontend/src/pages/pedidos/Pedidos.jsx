@@ -63,10 +63,14 @@ const Pedidos = () => {
     const { datos: instituciones } = useLista('/instituciones');
     const { datos: contratos } = useLista('/contratos?estado=vigente');
     const [buscar, setBuscar] = useState('');
-    // Desde el detalle de un contrato se llega con ?contrato=ID: el formulario abre con ese contrato
-    const [form, setForm] = useState(() => params.get('contrato')
-        ? { id_contrato: params.get('contrato'), fecha_programada: '', observaciones: '', cantidades: {} }
-        : null);
+    // Desde el detalle de un contrato se llega con ?contrato=ID: el formulario abre con ese contrato.
+    // Desde un pedido con devolución llega además ?reponer=renglon:cantidad,...&de=PED-...: ya viene lleno.
+    const [form, setForm] = useState(() => {
+        if (!params.get('contrato')) return null;
+        const cantidades = Object.fromEntries((params.get('reponer') || '').split(',').filter(Boolean).map(x => x.split(':')));
+        const de = params.get('de');
+        return { id_contrato: params.get('contrato'), fecha_programada: '', observaciones: de ? `Reposición de lo devuelto en ${de}` : '', cantidades };
+    });
     const [error, setError] = useState('');
     const [consulta, setConsulta] = useState(null);
     const [aviso, mostrar] = useAvisos();
